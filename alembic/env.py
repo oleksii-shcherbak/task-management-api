@@ -1,14 +1,13 @@
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
+import app.models  # noqa: F401 - Required for model registration
+from alembic import context
 from app.config import settings
 from app.database import Base
-
-import app.models  # noqa: F401 - Required for model registration
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -61,10 +60,7 @@ def run_migrations_online() -> None:
 
     def do_run_migrations(connection):
         """Execute migrations using the provided connection."""
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()
