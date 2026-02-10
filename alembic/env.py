@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.config import settings
 from app.database import Base
 
+import app.models  # noqa: F401 - Required for model registration
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
