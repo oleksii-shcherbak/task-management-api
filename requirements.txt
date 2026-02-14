@@ -6,3 +6,4 @@ sqlalchemy[asyncio]~=2.0.46
 alembic~=1.18.3
 asyncpg~=0.31.0
 bcrypt~=5.0.0
+PyJWT[crypto]~=2.11.0
