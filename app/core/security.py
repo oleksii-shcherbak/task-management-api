@@ -55,7 +55,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     if expires_delta is None:
         expires_delta = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
 
-    expire = datetime.now(datetime.UTC) + expires_delta
+    expire = datetime.now(UTC) + expires_delta
     to_encode.update({"exp": expire, "iat": datetime.now(UTC)})
 
     # Always use config for secret_key and algorithm
