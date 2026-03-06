@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -81,3 +83,26 @@ def decode_access_token(token: str) -> dict:
     return jwt.decode(
         token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
     )
+
+
+def generate_refresh_token() -> str:
+    """
+    Generate a cryptographically secure random token string.
+
+    Returns:
+        A URL-safe random token (43 characters, 256 bits of entropy)
+    """
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(plain_token: str) -> str:
+    """
+    Hash a plain token using SHA-256 for database storage.
+
+    Args:
+        plain_token: The plain-text token to hash
+
+    Returns:
+        A 64-character hex digest suitable for the token_hash column
+    """
+    return hashlib.sha256(plain_token.encode()).hexdigest()
