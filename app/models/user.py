@@ -29,7 +29,7 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole),
         default=UserRole.MEMBER,
-        server_default=UserRole.MEMBER.value,
+        server_default=UserRole.MEMBER.name,
         nullable=False,
     )
     # New users start inactive

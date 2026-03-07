@@ -60,7 +60,9 @@ def test_invalid_token_raises_exception():
 
 
 def test_wrong_secret_is_rejected():
-    fake_token = jwt.encode({"sub": "123"}, "wrongsecret", algorithm="HS256")
+    fake_token = jwt.encode(
+        {"sub": "123"}, "wrong-secret-key-that-is-long-enough", algorithm="HS256"
+    )
     with pytest.raises(jwt.InvalidSignatureError):
         decode_access_token(fake_token)
 
@@ -69,7 +71,7 @@ def test_tampered_token_raises_exception():
     token = create_access_token(data={"sub": "testuser"})
     parts = token.split(".")
     tampered_payload = jwt.encode(
-        {"sub": "hacker"}, "fakekey", algorithm="HS256"
+        {"sub": "hacker"}, "fake-key-that-is-also-long-enough-now", algorithm="HS256"
     ).split(".")[1]
     tampered_token = f"{parts[0]}.{tampered_payload}.{parts[2]}"
     with pytest.raises(jwt.InvalidTokenError):
