@@ -127,7 +127,9 @@ async def test_login_error_message_is_generic(client: AsyncClient):
         json={"email": "ghost@example.com", "password": "doesntmatter"},
     )
 
-    assert wrong_password.json()["detail"] == no_user.json()["detail"]
+    assert (
+        wrong_password.json()["error"]["message"] == no_user.json()["error"]["message"]
+    )
 
 
 # --- Refresh ---

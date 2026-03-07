@@ -1,9 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ConflictError, UnauthorizedError
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
@@ -31,7 +32,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     # Check if email is already registered
     result = await db.execute(select(User).where(User.email == data.email))
     if result.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Email already registered")
+        raise ConflictError("Email already registered")
 
     user = User(
         email=data.email,
@@ -57,10 +58,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     # Always check both user existence AND password before raising error.
     # This prevents timing attacks that reveal whether an email is registered.
     if not user or not verify_password(data.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-        )
+        raise UnauthorizedError("Invalid email or password")
 
     # Issue tokens
     access_token = create_access_token({"sub": str(user.id)})
@@ -95,10 +93,7 @@ async def refresh(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
         or stored_token.is_revoked
         or stored_token.expires_at < datetime.now(UTC)
     ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token",
-        )
+        raise UnauthorizedError("Invalid or expired refresh token")
 
     # Revoke the old token and issue a new one
     stored_token.is_revoked = True
