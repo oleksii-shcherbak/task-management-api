@@ -1,17 +1,57 @@
+import time
+import uuid
+
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.auth import router as auth_router
 from app.config import settings
 from app.core.exceptions import AppException
+from app.core.logging import setup_logging
 
 app = FastAPI(
     title=settings.APP_NAME,
     description="Task Management API",
     version=settings.APP_VERSION,
 )
+
+setup_logging()
+
+logger = structlog.get_logger()
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = str(uuid.uuid4())
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = round((time.perf_counter() - start) * 1000)
+        logger.info(
+            "request_completed",
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=duration_ms,
+        )
+        return response
+
+
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,9 +97,9 @@ async def validation_exception_handler(
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(
-    _request: Request, _exc: Exception
+    _request: Request, exc: Exception
 ) -> JSONResponse:
-    # TODO: log full traceback here once structured logging is added
+    logger.error("unhandled_exception", exc_info=exc)
     return JSONResponse(
         status_code=500,
         content={
