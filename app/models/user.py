@@ -10,6 +10,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.project import Project
+    from app.models.project_member import ProjectMember
     from app.models.refresh_token import RefreshToken
 
 
@@ -50,6 +52,18 @@ class User(Base):
         "RefreshToken",
         back_populates="user",
         cascade="all, delete-orphan",  # deleting User deletes their tokens in SQLAlchemy session
+    )
+
+    owned_projects: Mapped[list[Project]] = relationship(
+        "Project",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )
+
+    project_memberships: Mapped[list[ProjectMember]] = relationship(
+        "ProjectMember",
+        back_populates="user",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:
