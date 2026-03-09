@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.models.project import ProjectStatus
+from app.models.project_member import ProjectRole
 
 
 class ProjectCreate(BaseModel):
@@ -32,3 +33,21 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class MemberAddRequest(BaseModel):
+    user_id: int
+    role: ProjectRole = ProjectRole.MEMBER
+
+
+class MemberResponse(BaseModel):
+    user_id: int
+    project_id: int
+    role: ProjectRole
+    joined_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MemberRoleUpdate(BaseModel):
+    role: ProjectRole
