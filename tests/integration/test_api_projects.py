@@ -1,0 +1,295 @@
+import pytest
+from httpx import AsyncClient
+
+USER_ALICE = {
+    "email": "alice@example.com",
+    "password": "securepassword123",
+    "name": "Alice",
+}
+
+USER_BOB = {
+    "email": "bob@example.com",
+    "password": "securepassword123",
+    "name": "Bob",
+}
+
+
+# --- Helpers ---
+
+
+async def register_and_login(client: AsyncClient, user: dict) -> str:
+    """Register a user and return their access token."""
+    await client.post("/api/v1/auth/register", json=user)
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": user["email"], "password": user["password"]},
+    )
+    return response.json()["access_token"]
+
+
+async def auth_headers(token: str) -> dict:
+    """Return Authorization header dict for a token."""
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def create_project(
+    client: AsyncClient, token: str, name: str = "Test Project"
+) -> dict:
+    """Create a project and return the response data."""
+    response = await client.post(
+        "/api/v1/projects",
+        json={"name": name, "description": "A test project"},
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 201, f"Project creation failed: {response.text}"
+    return response.json()
+
+
+# --- Project CRUD ---
+
+
+@pytest.mark.asyncio
+async def test_create_project_success(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    response = await client.post(
+        "/api/v1/projects",
+        json={"name": "My Project", "description": "Test"},
+        headers=await auth_headers(token),
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["name"] == "My Project"
+    assert data["description"] == "Test"
+    assert data["status"] == "active"
+    assert "id" in data
+    assert "owner_id" in data
+
+
+@pytest.mark.asyncio
+async def test_create_project_requires_auth(client: AsyncClient):
+    response = await client.post(
+        "/api/v1/projects",
+        json={"name": "My Project"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_list_projects_returns_own_projects(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    await create_project(client, token, "Project A")
+    await create_project(client, token, "Project B")
+
+    response = await client.get(
+        "/api/v1/projects",
+        headers=await auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    names = {p["name"] for p in data}
+    assert names == {"Project A", "Project B"}
+
+
+@pytest.mark.asyncio
+async def test_list_projects_excludes_other_users_projects(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+
+    await create_project(client, alice_token, "Alice's Project")
+    await create_project(client, bob_token, "Bob's Project")
+
+    response = await client.get(
+        "/api/v1/projects",
+        headers=await auth_headers(alice_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "Alice's Project"
+
+
+@pytest.mark.asyncio
+async def test_get_project_success(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}",
+        headers=await auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == project["id"]
+
+
+@pytest.mark.asyncio
+async def test_get_project_not_member_returns_403(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+
+    project = await create_project(client, alice_token)
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}",
+        headers=await auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_project_success(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}",
+        json={"name": "Updated Name"},
+        headers=await auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "Updated Name"
+    assert data["description"] == "A test project"  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_update_project_member_cannot_update(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": 2, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}",
+        json={"name": "Bob's rename attempt"},
+        headers=await auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_project_soft_deletes(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    delete_response = await client.delete(
+        f"/api/v1/projects/{project['id']}",
+        headers=await auth_headers(token),
+    )
+    assert delete_response.status_code == 204
+
+    list_response = await client.get(
+        "/api/v1/projects",
+        headers=await auth_headers(token),
+    )
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_delete_project_non_owner_returns_403(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+
+    response = await client.delete(
+        f"/api/v1/projects/{project['id']}",
+        headers=await auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+# --- Member Management ---
+
+
+@pytest.mark.asyncio
+async def test_add_member_success(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+
+    # Bob is user_id=2 since he was the second user registered in this test
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": 2, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["role"] == "member"
+
+
+@pytest.mark.asyncio
+async def test_add_member_duplicate_returns_409(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": 2, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": 2, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_list_members_includes_owner(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=await auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["role"] == "owner"
+
+
+@pytest.mark.asyncio
+async def test_remove_member_success(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": 2, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+
+    response = await client.delete(
+        f"/api/v1/projects/{project['id']}/members/2",
+        headers=await auth_headers(alice_token),
+    )
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_cannot_remove_owner(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.delete(
+        f"/api/v1/projects/{project['id']}/members/1",
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 403
