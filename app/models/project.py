@@ -11,6 +11,8 @@ from app.database import Base
 
 if TYPE_CHECKING:
     from app.models.project_member import ProjectMember
+    from app.models.task import Task
+    from app.models.task_status import TaskStatus
     from app.models.user import User
 
 
@@ -61,6 +63,19 @@ class Project(Base):
     owner: Mapped[User] = relationship("User", back_populates="owned_projects")
     members: Mapped[list[ProjectMember]] = relationship(
         "ProjectMember",
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+
+    task_statuses: Mapped[list[TaskStatus]] = relationship(
+        "TaskStatus",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="TaskStatus.position",
+    )
+
+    tasks: Mapped[list[Task]] = relationship(
+        "Task",
         back_populates="project",
         cascade="all, delete-orphan",
     )
