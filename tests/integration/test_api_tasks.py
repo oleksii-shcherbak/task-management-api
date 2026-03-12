@@ -294,3 +294,62 @@ async def test_list_tasks_ordered_by_status_then_position(client: AsyncClient):
     # Both Backlog tasks must appear before the In Progress task
     assert ids.index(t1["id"]) < ids.index(t2["id"])
     assert ids.index(t3["id"]) < ids.index(t2["id"])
+
+
+# --- Get Task ---
+
+
+@pytest.mark.asyncio
+async def test_get_task_embeds_status(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    response = await client.get(
+        f"/api/v1/tasks/{task['id']}",
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data["status"], dict)
+    assert "id" in data["status"]
+    assert "name" in data["status"]
+    assert "type" in data["status"]
+    assert "color" in data["status"]
+
+
+@pytest.mark.asyncio
+async def test_get_task_non_member_forbidden(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    task = await create_task(client, alice_token, project["id"])
+
+    response = await client.get(
+        f"/api/v1/tasks/{task['id']}",
+        headers=auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_deleted_task_returns_404(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    await client.delete(f"/api/v1/tasks/{task['id']}", headers=auth_headers(token))
+
+    response = await client.get(
+        f"/api/v1/tasks/{task['id']}",
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_nonexistent_task_returns_404(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.get("/api/v1/tasks/99999", headers=auth_headers(token))
+    assert response.status_code == 404
