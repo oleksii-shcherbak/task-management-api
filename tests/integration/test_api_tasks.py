@@ -168,3 +168,129 @@ async def test_create_task_assignee_not_member_forbidden(client: AsyncClient):
         headers=auth_headers(alice_token),
     )
     assert response.status_code == 403
+
+
+# --- List Tasks ---
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_only_shows_project_tasks(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project_a = await create_project(client, token)
+    project_b = await create_project(client, token)
+
+    await create_task(client, token, project_a["id"], title="Task in A")
+    await create_task(client, token, project_a["id"], title="Task in A 2")
+    await create_task(client, token, project_b["id"], title="Task in B")
+
+    response = await client.get(
+        f"/api/v1/projects/{project_a['id']}/tasks",
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert all(t["project_id"] == project_a["id"] for t in data)
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_filter_by_status(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+
+    await create_task(client, token, project["id"], title="Backlog Task")
+    await create_task(
+        client,
+        token,
+        project["id"],
+        title="In Progress Task",
+        status_id=statuses["In Progress"]["id"],
+    )
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        params={"status_id": statuses["Backlog"]["id"]},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Backlog Task"
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_filter_by_priority(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    await create_task(client, token, project["id"], title="High", priority="high")
+    await create_task(client, token, project["id"], title="Low", priority="low")
+    await create_task(client, token, project["id"], title="No Priority")
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        params={"priority": "high"},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "High"
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_non_member_forbidden(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        headers=auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_excludes_deleted(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    task = await create_task(client, token, project["id"], title="To Delete")
+    await client.delete(f"/api/v1/tasks/{task['id']}", headers=auth_headers(token))
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_ordered_by_status_then_position(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+
+    t1 = await create_task(client, token, project["id"], title="Backlog 1")
+    t2 = await create_task(
+        client,
+        token,
+        project["id"],
+        title="In Progress 1",
+        status_id=statuses["In Progress"]["id"],
+    )
+    t3 = await create_task(client, token, project["id"], title="Backlog 2")
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        headers=auth_headers(token),
+    )
+    data = response.json()
+    ids = [t["id"] for t in data]
+
+    # Both Backlog tasks must appear before the In Progress task
+    assert ids.index(t1["id"]) < ids.index(t2["id"])
+    assert ids.index(t3["id"]) < ids.index(t2["id"])
