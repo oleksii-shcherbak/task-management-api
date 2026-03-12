@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_member_or_403, get_project_or_404
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.database import get_db
 from app.models.project import Project
 from app.models.project_member import ProjectMember, ProjectRole
+from app.models.task_status import StatusType, TaskStatus
 from app.models.user import User
 from app.schemas.project import (
     MemberAddRequest,
@@ -18,38 +19,9 @@ from app.schemas.project import (
     ProjectResponse,
     ProjectUpdate,
 )
+from app.schemas.task import TaskStatusResponse
 
 router = APIRouter(prefix="/projects", tags=["projects"])
-
-
-async def get_project_or_404(project_id: int, db: AsyncSession) -> Project:
-    """Fetch a project by ID, raise 404 if not found or soft-deleted."""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.deleted_at.is_(None),
-        )
-    )
-    project = result.scalar_one_or_none()
-    if project is None:
-        raise NotFoundError("Project not found")
-    return project
-
-
-async def get_member_or_403(
-    project_id: int, user_id: int, db: AsyncSession
-) -> ProjectMember:
-    """Fetch membership record, raise 403 if user is not a member."""
-    result = await db.execute(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_id,
-        )
-    )
-    member = result.scalar_one_or_none()
-    if member is None:
-        raise ForbiddenError("You are not a member of this project")
-    return member
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ProjectResponse)
@@ -71,9 +43,55 @@ async def create_project(
         role=ProjectRole.OWNER,
     )
     db.add(membership)
+
+    default_statuses = [
+        TaskStatus(
+            project_id=project.id,
+            name="Backlog",
+            color="#94a3b8",
+            position=1,
+            type=StatusType.UNSTARTED,
+            is_default=True,
+        ),
+        TaskStatus(
+            project_id=project.id,
+            name="In Progress",
+            color="#3b82f6",
+            position=2,
+            type=StatusType.STARTED,
+            is_default=False,
+        ),
+        TaskStatus(
+            project_id=project.id,
+            name="Done",
+            color="#22c55e",
+            position=3,
+            type=StatusType.COMPLETED,
+            is_default=False,
+        ),
+    ]
+    db.add_all(default_statuses)
+
     await db.commit()
     await db.refresh(project)
     return project
+
+
+@router.get("/{project_id}/statuses", response_model=list[TaskStatusResponse])
+async def list_project_statuses(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[TaskStatus]:
+    await get_project_or_404(project_id, db)
+    await get_member_or_403(project_id, current_user.id, db)
+
+    result = await db.execute(
+        select(TaskStatus)
+        .where(TaskStatus.project_id == project_id)
+        .order_by(TaskStatus.position.asc())
+    )
+    return list(result.scalars().all())
 
 
 @router.get("", response_model=list[ProjectResponse])

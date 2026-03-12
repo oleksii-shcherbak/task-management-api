@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.models.project import Project
     from app.models.project_member import ProjectMember
     from app.models.refresh_token import RefreshToken
+    from app.models.task import Task
 
 
 class UserRole(PyEnum):
@@ -64,6 +65,11 @@ class User(Base):
         "ProjectMember",
         back_populates="user",
         cascade="all, delete-orphan",
+    )
+
+    assigned_tasks: Mapped[list[Task]] = relationship(
+        "Task",
+        back_populates="assignee",
     )
 
     def __repr__(self) -> str:
