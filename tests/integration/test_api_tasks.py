@@ -546,3 +546,201 @@ async def test_delete_nonexistent_task_returns_404(client: AsyncClient):
 
     response = await client.delete("/api/v1/tasks/99999", headers=auth_headers(token))
     assert response.status_code == 404
+
+
+# --- Reorder Task ---
+
+
+@pytest.mark.asyncio
+async def test_reorder_task_move_up_same_column(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    backlog_id = statuses["Backlog"]["id"]
+
+    t1 = await create_task(client, token, project["id"], title="A")  # pos 1
+    t2 = await create_task(client, token, project["id"], title="B")  # pos 2
+    t3 = await create_task(client, token, project["id"], title="C")  # pos 3
+    t4 = await create_task(client, token, project["id"], title="D")  # pos 4
+
+    # Move D (pos 4) → pos 1
+    response = await client.patch(
+        f"/api/v1/tasks/{t4['id']}/position",
+        json={"status_id": backlog_id, "position": 1},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    assert response.json()["position"] == 1
+
+    tasks = (
+        await client.get(
+            f"/api/v1/projects/{project['id']}/tasks",
+            params={"status_id": backlog_id},
+            headers=auth_headers(token),
+        )
+    ).json()
+    positions = {t["id"]: t["position"] for t in tasks}
+    assert positions[t4["id"]] == 1
+    assert positions[t1["id"]] == 2
+    assert positions[t2["id"]] == 3
+    assert positions[t3["id"]] == 4
+
+
+@pytest.mark.asyncio
+async def test_reorder_task_move_down_same_column(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    backlog_id = statuses["Backlog"]["id"]
+
+    t1 = await create_task(client, token, project["id"], title="A")  # pos 1
+    t2 = await create_task(client, token, project["id"], title="B")  # pos 2
+    t3 = await create_task(client, token, project["id"], title="C")  # pos 3
+    t4 = await create_task(client, token, project["id"], title="D")  # pos 4
+
+    # Move A (pos 1) → pos 3
+    response = await client.patch(
+        f"/api/v1/tasks/{t1['id']}/position",
+        json={"status_id": backlog_id, "position": 3},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    assert response.json()["position"] == 3
+
+    tasks = (
+        await client.get(
+            f"/api/v1/projects/{project['id']}/tasks",
+            params={"status_id": backlog_id},
+            headers=auth_headers(token),
+        )
+    ).json()
+    positions = {t["id"]: t["position"] for t in tasks}
+    assert positions[t2["id"]] == 1
+    assert positions[t3["id"]] == 2
+    assert positions[t1["id"]] == 3
+    assert positions[t4["id"]] == 4
+
+
+@pytest.mark.asyncio
+async def test_reorder_task_different_column(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    backlog_id = statuses["Backlog"]["id"]
+    in_progress_id = statuses["In Progress"]["id"]
+
+    t1 = await create_task(client, token, project["id"], title="A")  # Backlog pos 1
+    t2 = await create_task(client, token, project["id"], title="B")  # Backlog pos 2
+    t3 = await create_task(client, token, project["id"], title="C")  # Backlog pos 3
+    t4 = await create_task(
+        client, token, project["id"], title="D", status_id=in_progress_id
+    )  # In Progress pos 1
+
+    # Move C from Backlog pos 3 → In Progress pos 1
+    response = await client.patch(
+        f"/api/v1/tasks/{t3['id']}/position",
+        json={"status_id": in_progress_id, "position": 1},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"]["name"] == "In Progress"
+    assert response.json()["position"] == 1
+
+    # Backlog gap closed: A=1, B=2
+    backlog = (
+        await client.get(
+            f"/api/v1/projects/{project['id']}/tasks",
+            params={"status_id": backlog_id},
+            headers=auth_headers(token),
+        )
+    ).json()
+    bp = {t["id"]: t["position"] for t in backlog}
+    assert len(backlog) == 2
+    assert bp[t1["id"]] == 1
+    assert bp[t2["id"]] == 2
+
+    # In Progress room made: C=1, D=2
+    ip = (
+        await client.get(
+            f"/api/v1/projects/{project['id']}/tasks",
+            params={"status_id": in_progress_id},
+            headers=auth_headers(token),
+        )
+    ).json()
+    ipp = {t["id"]: t["position"] for t in ip}
+    assert len(ip) == 2
+    assert ipp[t3["id"]] == 1
+    assert ipp[t4["id"]] == 2
+
+
+@pytest.mark.asyncio
+async def test_reorder_task_clamp_to_max(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    backlog_id = statuses["Backlog"]["id"]
+
+    t1 = await create_task(client, token, project["id"], title="A")
+    await create_task(client, token, project["id"], title="B")
+    await create_task(client, token, project["id"], title="C")
+
+    # Request pos 99, should clamp to 3
+    response = await client.patch(
+        f"/api/v1/tasks/{t1['id']}/position",
+        json={"status_id": backlog_id, "position": 99},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    assert response.json()["position"] == 3
+
+
+@pytest.mark.asyncio
+async def test_reorder_task_noop(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+
+    task = await create_task(client, token, project["id"], title="A")  # pos 1
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}/position",
+        json={"status_id": statuses["Backlog"]["id"], "position": 1},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    assert response.json()["position"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reorder_task_member_forbidden(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], user_id=2, role="member")
+    statuses = await get_statuses(client, alice_token, project["id"])
+
+    task = await create_task(client, alice_token, project["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}/position",
+        json={"status_id": statuses["Backlog"]["id"], "position": 1},
+        headers=auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_reorder_task_invalid_status_returns_404(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    project_a = await create_project(client, alice_token)
+    project_b = await create_project(client, alice_token)
+    statuses_b = await get_statuses(client, alice_token, project_b["id"])
+
+    task = await create_task(client, alice_token, project_a["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}/position",
+        json={"status_id": statuses_b["Backlog"]["id"], "position": 1},
+        headers=auth_headers(alice_token),
+    )
+    assert response.status_code == 404
