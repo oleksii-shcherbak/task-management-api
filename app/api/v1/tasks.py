@@ -236,6 +236,7 @@ async def update_task(
         setattr(task, field, value)
 
     await db.commit()
+    db.expunge(task)  # Detach from session to avoid stale data on return
     return await get_task_or_404(task.id, db)
 
 
@@ -345,6 +346,7 @@ async def reorder_task(
     task.position = new_position
 
     await db.commit()
+    db.expunge(task)  # Detach from session to avoid stale data on return
     return await get_task_or_404(task.id, db)
 
 

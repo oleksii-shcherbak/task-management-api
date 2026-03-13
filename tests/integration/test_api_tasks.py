@@ -353,3 +353,148 @@ async def test_get_nonexistent_task_returns_404(client: AsyncClient):
 
     response = await client.get("/api/v1/tasks/99999", headers=auth_headers(token))
     assert response.status_code == 404
+
+
+# --- Update Task ---
+
+
+@pytest.mark.asyncio
+async def test_update_task_owner_can_update_all_fields(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={
+            "title": "Updated Title",
+            "description": "New desc",
+            "priority": "urgent",
+        },
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "Updated Title"
+    assert data["description"] == "New desc"
+    assert data["priority"] == "urgent"
+
+
+@pytest.mark.asyncio
+async def test_update_task_status_appends_to_end_of_new_column(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    in_progress_id = statuses["In Progress"]["id"]
+
+    # Create 2 tasks already in In Progress - they should get positions 1 and 2
+    await create_task(
+        client, token, project["id"], title="IP 1", status_id=in_progress_id
+    )
+    await create_task(
+        client, token, project["id"], title="IP 2", status_id=in_progress_id
+    )
+    # Create a new task in Backlog and move it to In Progress - it should get position 3
+    task = await create_task(client, token, project["id"], title="Backlog Task")
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"status_id": in_progress_id},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    assert response.json()["position"] == 3
+    assert response.json()["status"]["name"] == "In Progress"
+
+
+@pytest.mark.asyncio
+async def test_update_task_member_can_update_own_assigned_task(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], user_id=2, role="member")
+    statuses = await get_statuses(client, alice_token, project["id"])
+
+    task = await create_task(
+        client, alice_token, project["id"], title="Bob's Task", assignee_id=2
+    )
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={
+            "status_id": statuses["In Progress"]["id"],
+            "description": "Working on it",
+        },
+        headers=auth_headers(bob_token),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"]["name"] == "In Progress"
+    assert data["description"] == "Working on it"
+
+
+@pytest.mark.asyncio
+async def test_update_task_member_cannot_update_unassigned_task(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], user_id=2, role="member")
+
+    task = await create_task(client, alice_token, project["id"], title="Unassigned")
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"description": "Bob trying to update"},
+        headers=auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_task_member_cannot_update_forbidden_fields(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], user_id=2, role="member")
+
+    task = await create_task(
+        client, alice_token, project["id"], title="Task", assignee_id=2
+    )
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"title": "Bob's rename attempt"},
+        headers=auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_task_invalid_status_id_returns_404(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    project_a = await create_project(client, alice_token)
+    project_b = await create_project(client, alice_token)
+    statuses_b = await get_statuses(client, alice_token, project_b["id"])
+
+    task = await create_task(client, alice_token, project_a["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"status_id": statuses_b["Backlog"]["id"]},
+        headers=auth_headers(alice_token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_task_null_status_id_returns_422(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"status_id": None},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 422
