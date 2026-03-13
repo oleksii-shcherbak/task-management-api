@@ -498,3 +498,51 @@ async def test_update_task_null_status_id_returns_422(client: AsyncClient):
         headers=auth_headers(token),
     )
     assert response.status_code == 422
+
+
+# --- Delete Task ---
+
+
+@pytest.mark.asyncio
+async def test_delete_task_soft_deletes(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    delete_response = await client.delete(
+        f"/api/v1/tasks/{task['id']}", headers=auth_headers(token)
+    )
+    assert delete_response.status_code == 204
+
+    list_response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks", headers=auth_headers(token)
+    )
+    assert list_response.json() == []
+
+    get_response = await client.get(
+        f"/api/v1/tasks/{task['id']}", headers=auth_headers(token)
+    )
+    assert get_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_task_member_forbidden(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], user_id=2, role="member")
+
+    task = await create_task(client, alice_token, project["id"])
+
+    response = await client.delete(
+        f"/api/v1/tasks/{task['id']}", headers=auth_headers(bob_token)
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent_task_returns_404(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.delete("/api/v1/tasks/99999", headers=auth_headers(token))
+    assert response.status_code == 404
