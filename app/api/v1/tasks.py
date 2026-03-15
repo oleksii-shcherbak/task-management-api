@@ -8,10 +8,12 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user, get_member_or_403, get_project_or_404
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.database import get_db
+from app.models.activity_log import ActivityLog
 from app.models.project_member import ProjectMember, ProjectRole
 from app.models.task import Task, TaskPriority
 from app.models.task_status import TaskStatus
 from app.models.user import User
+from app.schemas.activity_log import ActivityLogResponse
 from app.schemas.task import TaskCreate, TaskReorder, TaskResponse, TaskUpdate
 from app.services import task_service
 
@@ -115,6 +117,17 @@ async def create_task(
         position=position,
     )
     db.add(task)
+    await db.flush()  # get task.id without committing yet
+
+    task_service.log_activity(
+        db,
+        project_id=project_id,
+        task_id=task.id,
+        user_id=current_user.id,
+        action="task_created",
+        new_value=body.title,
+    )
+
     await db.commit()
     return await get_task_or_404(task.id, db)
 
@@ -168,6 +181,27 @@ async def get_task(
     task = await get_task_or_404(task_id, db)
     await get_member_or_403(task.project_id, current_user.id, db)
     return task
+
+
+# --- Get task activity ---
+
+
+@tasks_router.get("/{task_id}/activity", response_model=list[ActivityLogResponse])
+async def get_task_activity(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ActivityLog]:
+    task = await get_task_or_404(task_id, db)
+    await get_member_or_403(task.project_id, current_user.id, db)
+
+    result = await db.execute(
+        select(ActivityLog)
+        .where(ActivityLog.task_id == task_id)
+        .options(selectinload(ActivityLog.actor))
+        .order_by(ActivityLog.created_at.asc())
+    )
+    return list(result.scalars().all())
 
 
 # --- Update task ---
