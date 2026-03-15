@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.comment import Comment
     from app.models.project import Project
     from app.models.task_status import TaskStatus
     from app.models.user import User
@@ -81,6 +82,9 @@ class Task(Base):
     status: Mapped[TaskStatus] = relationship("TaskStatus", back_populates="tasks")
     assignee: Mapped[User | None] = relationship(
         "User", back_populates="assigned_tasks"
+    )
+    comments: Mapped[list[Comment]] = relationship(
+        "Comment", back_populates="task", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:

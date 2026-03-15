@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.comment import Comment
     from app.models.project import Project
     from app.models.project_member import ProjectMember
     from app.models.refresh_token import RefreshToken
@@ -71,6 +72,8 @@ class User(Base):
         "Task",
         back_populates="assignee",
     )
+
+    comments: Mapped[list[Comment]] = relationship("Comment", back_populates="author")
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email='{self.email}')>"  # Simple string representation for debugging
