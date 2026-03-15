@@ -13,6 +13,7 @@ from app.models.task import Task, TaskPriority
 from app.models.task_status import TaskStatus
 from app.models.user import User
 from app.schemas.task import TaskCreate, TaskReorder, TaskResponse, TaskUpdate
+from app.services import task_service
 
 project_tasks_router = APIRouter(prefix="/projects", tags=["tasks"])
 tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -21,7 +22,7 @@ tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
 async def get_task_or_404(task_id: int, db: AsyncSession) -> Task:
     result = await db.execute(
         select(Task)
-        .options(selectinload(Task.status))
+        .options(selectinload(Task.status), selectinload(Task.assignee))
         .where(
             Task.id == task_id,
             Task.deleted_at.is_(None),
@@ -203,25 +204,29 @@ async def update_task(
     if disallowed:
         raise ForbiddenError("You do not have permission to update these fields")
 
-    # If status is changing, validate it belongs to this project and recalculate position
-    if "status_id" in update_data and update_data["status_id"] is None:
-        raise ValidationError(
-            "status_id cannot be cleared — a task must always have a status"
-        )
-    if "status_id" in update_data and update_data["status_id"] != task.status_id:
-        result = await db.execute(
-            select(TaskStatus).where(
-                TaskStatus.id == update_data["status_id"],
-                TaskStatus.project_id == task.project_id,
+    # Validate new status and fetch the object for display name logging
+    new_status: TaskStatus | None = None
+    if "status_id" in update_data:
+        if update_data["status_id"] is None:
+            raise ValidationError(
+                "status_id cannot be cleared — a task must always have a status"
             )
-        )
-        if result.scalar_one_or_none() is None:
-            raise NotFoundError("Status not found in this project")
-        task.position = await get_next_position(
-            task.project_id, update_data["status_id"], db
-        )
+        if update_data["status_id"] != task.status_id:
+            result = await db.execute(
+                select(TaskStatus).where(
+                    TaskStatus.id == update_data["status_id"],
+                    TaskStatus.project_id == task.project_id,
+                )
+            )
+            new_status = result.scalar_one_or_none()
+            if new_status is None:
+                raise NotFoundError("Status not found in this project")
+            task.position = await get_next_position(
+                task.project_id, update_data["status_id"], db
+            )
 
-    # If assignee is changing, validate they are a project member
+    # Validate new assignee and fetch the User object for display name logging
+    new_assignee: User | None = None
     if "assignee_id" in update_data and update_data["assignee_id"] is not None:
         result = await db.execute(
             select(ProjectMember).where(
@@ -231,9 +236,15 @@ async def update_task(
         )
         if result.scalar_one_or_none() is None:
             raise ForbiddenError("Assignee is not a member of this project")
+        result = await db.execute(
+            select(User).where(User.id == update_data["assignee_id"])
+        )
+        new_assignee = result.scalar_one_or_none()
 
-    for field, value in update_data.items():
-        setattr(task, field, value)
+    # Delegate field updates and activity logging to the service
+    await task_service.update_task(
+        db, task, body, current_user, new_status, new_assignee
+    )
 
     await db.commit()
     db.expunge(task)  # Detach from session to avoid stale data on return
