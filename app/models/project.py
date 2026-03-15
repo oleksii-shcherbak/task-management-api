@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.activity_log import ActivityLog
     from app.models.project_member import ProjectMember
     from app.models.task import Task
     from app.models.task_status import TaskStatus
@@ -78,6 +79,10 @@ class Project(Base):
         "Task",
         back_populates="project",
         cascade="all, delete-orphan",
+    )
+
+    activity_logs: Mapped[list[ActivityLog]] = relationship(
+        "ActivityLog", back_populates="project", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:

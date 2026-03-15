@@ -1,3 +1,4 @@
+from app.models.activity_log import ActivityLog
 from app.models.comment import Comment
 from app.models.project import Project, ProjectStatus
 from app.models.project_member import ProjectMember, ProjectRole
@@ -7,6 +8,7 @@ from app.models.task_status import StatusType, TaskStatus
 from app.models.user import User, UserRole
 
 __all__ = [
+    "ActivityLog",
     "Comment",
     "Project",
     "ProjectMember",
