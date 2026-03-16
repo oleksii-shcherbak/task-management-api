@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.models.activity_log import ActivityLog
     from app.models.comment import Comment
     from app.models.project import Project
+    from app.models.task_assignee import TaskAssignee
     from app.models.task_status import TaskStatus
     from app.models.user import User
 
@@ -43,11 +44,6 @@ class Task(Base):
         ForeignKey("task_statuses.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
-    )
-
-    # SET NULL: if an assignee is deleted, keep the task but just mark it unassigned.
-    assignee_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -81,8 +77,11 @@ class Task(Base):
 
     project: Mapped[Project] = relationship("Project", back_populates="tasks")
     status: Mapped[TaskStatus] = relationship("TaskStatus", back_populates="tasks")
-    assignee: Mapped[User | None] = relationship(
-        "User", back_populates="assigned_tasks"
+    task_assignees: Mapped[list[TaskAssignee]] = relationship(
+        "TaskAssignee", back_populates="task", cascade="all, delete-orphan"
+    )
+    assignees: Mapped[list[User]] = relationship(
+        "User", secondary="task_assignees", viewonly=True
     )
     comments: Mapped[list[Comment]] = relationship(
         "Comment", back_populates="task", cascade="all, delete-orphan"

@@ -70,8 +70,7 @@ class User(Base):
     )
 
     assigned_tasks: Mapped[list[Task]] = relationship(
-        "Task",
-        back_populates="assignee",
+        "Task", secondary="task_assignees", viewonly=True
     )
 
     comments: Mapped[list[Comment]] = relationship("Comment", back_populates="author")
