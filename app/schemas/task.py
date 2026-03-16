@@ -19,11 +19,19 @@ class TaskStatusResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AssigneeResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+
+    model_config = {"from_attributes": True}
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
-    status_id: int | None = None  # defaults to project's is_default status if omitted
-    assignee_id: int | None = None
+    status_id: int | None = None
+    assignee_ids: list[int] = Field(default_factory=list)
     priority: TaskPriority | None = None
     due_date: datetime | None = None
 
@@ -32,7 +40,7 @@ class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     status_id: int | None = Field(default=None, gt=0)
-    assignee_id: int | None = None
+    assignee_ids: list[int] | None = None
     priority: TaskPriority | None = None
     due_date: datetime | None = None
 
@@ -43,7 +51,7 @@ class TaskResponse(BaseModel):
     title: str
     description: str | None
     status: TaskStatusResponse
-    assignee_id: int | None
+    assignees: list[AssigneeResponse]
     priority: TaskPriority | None
     position: int
     due_date: datetime | None
