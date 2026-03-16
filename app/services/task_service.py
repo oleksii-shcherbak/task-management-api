@@ -1,7 +1,9 @@
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity_log import ActivityLog
 from app.models.task import Task, TaskPriority
+from app.models.task_assignee import TaskAssignee
 from app.models.task_status import TaskStatus
 from app.models.user import User
 from app.schemas.task import TaskUpdate
@@ -36,7 +38,6 @@ async def update_task(
     body: TaskUpdate,
     current_user: User,
     new_status: TaskStatus | None,
-    new_assignee: User | None,
 ) -> None:
     """
     Apply updates from TaskUpdate to the task and log each meaningful change.
@@ -73,23 +74,47 @@ async def update_task(
                 )
             task.priority = new_value
 
-        elif field == "assignee_id":
-            old_name = task.assignee.name if task.assignee else None
-            new_name = new_assignee.name if new_assignee else None
-            if new_value != task.assignee_id:
-                log_activity(
-                    db,
-                    project_id=task.project_id,
-                    task_id=task.id,
-                    user_id=current_user.id,
-                    action="assignee_changed",
-                    old_value=old_name,
-                    new_value=new_name,
-                )
-            task.assignee_id = new_value
+        elif field == "assignee_ids":
+            new_ids = set(new_value) if new_value else set()
+            old_ids = {ta.user_id for ta in task.task_assignees}
+
+            to_remove = old_ids - new_ids
+            to_add = new_ids - old_ids
+
+            for ta in list(task.task_assignees):
+                if ta.user_id in to_remove:
+                    log_activity(
+                        db,
+                        project_id=task.project_id,
+                        task_id=task.id,
+                        user_id=current_user.id,
+                        action="assignee_removed",
+                        old_value=ta.user.name,
+                    )
+                    await db.delete(ta)
+
+            if to_add:
+                result = await db.execute(select(User).where(User.id.in_(to_add)))
+                new_users = {u.id: u for u in result.scalars().all()}
+                for uid in to_add:
+                    db.add(
+                        TaskAssignee(
+                            task_id=task.id,
+                            user_id=uid,
+                            assigned_by_id=current_user.id,
+                        )
+                    )
+                    user = new_users.get(uid)
+                    log_activity(
+                        db,
+                        project_id=task.project_id,
+                        task_id=task.id,
+                        user_id=current_user.id,
+                        action="assignee_added",
+                        new_value=user.name if user else str(uid),
+                    )
 
         else:
-            # For other fields like title and description, just log the change if the value is different.
             if field == "title" and new_value != getattr(task, field):
                 log_activity(
                     db,

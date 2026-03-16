@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models.activity_log import ActivityLog
 from app.models.project_member import ProjectMember, ProjectRole
 from app.models.task import Task, TaskPriority
+from app.models.task_assignee import TaskAssignee
 from app.models.task_status import TaskStatus
 from app.models.user import User
 from app.schemas.activity_log import ActivityLogResponse
@@ -24,7 +25,11 @@ tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
 async def get_task_or_404(task_id: int, db: AsyncSession) -> Task:
     result = await db.execute(
         select(Task)
-        .options(selectinload(Task.status), selectinload(Task.assignee))
+        .options(
+            selectinload(Task.status),
+            selectinload(Task.assignees),
+            selectinload(Task.task_assignees).selectinload(TaskAssignee.user),
+        )
         .where(
             Task.id == task_id,
             Task.deleted_at.is_(None),
@@ -93,23 +98,25 @@ async def create_task(
             raise NotFoundError("No default status found for this project")
         status_id = task_status.id
 
-    # Validate assignee is a project member
-    if body.assignee_id is not None:
+    if body.assignee_ids:
         result = await db.execute(
-            select(ProjectMember).where(
+            select(ProjectMember.user_id).where(
                 ProjectMember.project_id == project_id,
-                ProjectMember.user_id == body.assignee_id,
+                ProjectMember.user_id.in_(body.assignee_ids),
             )
         )
-        if result.scalar_one_or_none() is None:
-            raise ForbiddenError("Assignee is not a member of this project")
+        valid_ids = {row[0] for row in result}
+        invalid = set(body.assignee_ids) - valid_ids
+        if invalid:
+            raise ForbiddenError(
+                "One or more assignees are not members of this project"
+            )
 
     position = await get_next_position(project_id, status_id, db)
 
     task = Task(
         project_id=project_id,
         status_id=status_id,
-        assignee_id=body.assignee_id,
         title=body.title,
         description=body.description,
         priority=body.priority,
@@ -117,7 +124,14 @@ async def create_task(
         position=position,
     )
     db.add(task)
-    await db.flush()  # get task.id without committing yet
+    await db.flush()
+
+    for user_id in body.assignee_ids:
+        db.add(
+            TaskAssignee(
+                task_id=task.id, user_id=user_id, assigned_by_id=current_user.id
+            )
+        )
 
     task_service.log_activity(
         db,
@@ -149,7 +163,7 @@ async def list_tasks(
 
     query = (
         select(Task)
-        .options(selectinload(Task.status))
+        .options(selectinload(Task.status), selectinload(Task.assignees))
         .where(
             Task.project_id == project_id,
             Task.deleted_at.is_(None),
@@ -161,7 +175,9 @@ async def list_tasks(
     if priority is not None:
         query = query.where(Task.priority == priority)
     if assignee_id is not None:
-        query = query.where(Task.assignee_id == assignee_id)
+        query = query.where(
+            Task.task_assignees.any(TaskAssignee.user_id == assignee_id)
+        )
 
     query = query.order_by(Task.status_id.asc(), Task.position.asc())
 
@@ -224,13 +240,13 @@ async def update_task(
             "title",
             "description",
             "status_id",
-            "assignee_id",
+            "assignee_ids",
             "priority",
             "due_date",
         }
     else:
-        # Regular members can only update their own assigned tasks, limited fields
-        if task.assignee_id != current_user.id:
+        current_assignee_ids = {ta.user_id for ta in task.task_assignees}
+        if current_user.id not in current_assignee_ids:
             raise ForbiddenError("You can only update tasks assigned to you")
         allowed_fields = {"status_id", "description"}
 
@@ -238,7 +254,6 @@ async def update_task(
     if disallowed:
         raise ForbiddenError("You do not have permission to update these fields")
 
-    # Validate new status and fetch the object for display name logging
     new_status: TaskStatus | None = None
     if "status_id" in update_data:
         if update_data["status_id"] is None:
@@ -259,29 +274,24 @@ async def update_task(
                 task.project_id, update_data["status_id"], db
             )
 
-    # Validate new assignee and fetch the User object for display name logging
-    new_assignee: User | None = None
-    if "assignee_id" in update_data and update_data["assignee_id"] is not None:
+    if update_data.get("assignee_ids"):
         result = await db.execute(
-            select(ProjectMember).where(
+            select(ProjectMember.user_id).where(
                 ProjectMember.project_id == task.project_id,
-                ProjectMember.user_id == update_data["assignee_id"],
+                ProjectMember.user_id.in_(update_data["assignee_ids"]),
             )
         )
-        if result.scalar_one_or_none() is None:
-            raise ForbiddenError("Assignee is not a member of this project")
-        result = await db.execute(
-            select(User).where(User.id == update_data["assignee_id"])
-        )
-        new_assignee = result.scalar_one_or_none()
+        valid_ids = {row[0] for row in result}
+        invalid = set(update_data["assignee_ids"]) - valid_ids
+        if invalid:
+            raise ForbiddenError(
+                "One or more assignees are not members of this project"
+            )
 
-    # Delegate field updates and activity logging to the service
-    await task_service.update_task(
-        db, task, body, current_user, new_status, new_assignee
-    )
+    await task_service.update_task(db, task, body, current_user, new_status)
 
     await db.commit()
-    db.expunge(task)  # Detach from session to avoid stale data on return
+    db.expunge(task)
     return await get_task_or_404(task.id, db)
 
 
@@ -315,7 +325,6 @@ async def reorder_task(
     old_status_id = task.status_id
     new_status_id = body.status_id
 
-    # Compute max valid position for the target column
     result = await db.execute(
         select(func.count()).where(
             Task.project_id == task.project_id,
@@ -330,14 +339,11 @@ async def reorder_task(
     max_position = column_count if new_status_id == old_status_id else column_count + 1
     new_position = min(body.position, max_position)
 
-    # Nothing to do
     if new_status_id == old_status_id and new_position == old_position:
         return task
 
     if new_status_id == old_status_id:
-        # Same column — shift tasks between old and new position
         if new_position < old_position:
-            # Moving up: tasks in [new, old) shift down
             await db.execute(
                 update(Task)
                 .where(
@@ -351,7 +357,6 @@ async def reorder_task(
                 .values(position=Task.position + 1)
             )
         else:
-            # Moving down: tasks in (old, new] shift up
             await db.execute(
                 update(Task)
                 .where(
@@ -365,7 +370,6 @@ async def reorder_task(
                 .values(position=Task.position - 1)
             )
     else:
-        # Different column — close gap in old column, make room in new column
         await db.execute(
             update(Task)
             .where(
@@ -391,7 +395,7 @@ async def reorder_task(
     task.position = new_position
 
     await db.commit()
-    db.expunge(task)  # Detach from session to avoid stale data on return
+    db.expunge(task)
     return await get_task_or_404(task.id, db)
 
 
