@@ -46,7 +46,9 @@ async def get_current_user(
         )
 
     token_iat = payload.get("iat")
-    if token_iat and datetime.fromtimestamp(token_iat, UTC) < user.password_changed_at:
+    if token_iat and datetime.fromtimestamp(
+        token_iat, UTC
+    ) < user.password_changed_at.replace(microsecond=0):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token invalidated",

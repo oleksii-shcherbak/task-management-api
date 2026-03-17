@@ -58,7 +58,11 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     # Always check both user existence AND password before raising error.
     # This prevents timing attacks that reveal whether an email is registered.
-    if not user or not verify_password(data.password, user.password_hash):
+    if (
+        not user
+        or user.deleted_at is not None
+        or not verify_password(data.password, user.password_hash)
+    ):
         raise UnauthorizedError("Invalid email or password")
 
     # Issue tokens
