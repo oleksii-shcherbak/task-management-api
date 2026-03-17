@@ -218,6 +218,15 @@ async def test_get_public_profile_nonexistent_returns_404(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_deleted_account_email_can_be_reregistered(client: AsyncClient):
+    token = await register_and_login(client)
+    await client.delete("/api/v1/users/me", headers=auth(token))
+
+    response = await client.post("/api/v1/auth/register", json=USER)
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
 async def test_get_public_profile_deleted_user_returns_404(client: AsyncClient):
     token = await register_and_login(client)
     me = (await client.get("/api/v1/users/me", headers=auth(token))).json()

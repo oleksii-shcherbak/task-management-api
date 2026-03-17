@@ -30,7 +30,9 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 @router.post("/register", response_model=RegisterResponse, status_code=201)
 async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     # Check if email is already registered
-    result = await db.execute(select(User).where(User.email == data.email))
+    result = await db.execute(
+        select(User).where(User.email == data.email, User.deleted_at.is_(None))
+    )
     if result.scalar_one_or_none():
         raise ConflictError("Email already registered")
 
@@ -53,16 +55,14 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/login", response_model=TokenResponse)
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     # Load user by email
-    result = await db.execute(select(User).where(User.email == data.email))
+    result = await db.execute(
+        select(User).where(User.email == data.email, User.deleted_at.is_(None))
+    )
     user = result.scalar_one_or_none()
 
     # Always check both user existence AND password before raising error.
     # This prevents timing attacks that reveal whether an email is registered.
-    if (
-        not user
-        or user.deleted_at is not None
-        or not verify_password(data.password, user.password_hash)
-    ):
+    if not user or not verify_password(data.password, user.password_hash):
         raise UnauthorizedError("Invalid email or password")
 
     # Issue tokens
