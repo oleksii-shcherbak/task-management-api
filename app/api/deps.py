@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -36,12 +38,21 @@ async def get_current_user(
 
     result = await db.execute(select(User).where(User.id == int(user_id)))
     user = result.scalar_one_or_none()
-    if user is None:
+    if user is None or user.deleted_at is not None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    token_iat = payload.get("iat")
+    if token_iat and datetime.fromtimestamp(token_iat, UTC) < user.password_changed_at:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalidated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return user
 
 
