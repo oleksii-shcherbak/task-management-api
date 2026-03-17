@@ -157,6 +157,20 @@ async def test_create_task_regular_member_forbidden(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_create_task_with_assignees(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], user_id=2)
+
+    task = await create_task(client, alice_token, project["id"], assignee_ids=[2])
+
+    assert isinstance(task["assignees"], list)
+    assert len(task["assignees"]) == 1
+    assert task["assignees"][0]["id"] == 2
+
+
+@pytest.mark.asyncio
 async def test_create_task_assignee_not_member_forbidden(client: AsyncClient):
     alice_token = await register_and_login(client, USER_ALICE)
     await register_and_login(client, USER_BOB)  # Bob exists but is not in project
@@ -164,7 +178,7 @@ async def test_create_task_assignee_not_member_forbidden(client: AsyncClient):
 
     response = await client.post(
         f"/api/v1/projects/{project['id']}/tasks",
-        json={"title": "Task", "assignee_id": 2},
+        json={"title": "Task", "assignee_ids": [2]},
         headers=auth_headers(alice_token),
     )
     assert response.status_code == 403
@@ -416,7 +430,7 @@ async def test_update_task_member_can_update_own_assigned_task(client: AsyncClie
     statuses = await get_statuses(client, alice_token, project["id"])
 
     task = await create_task(
-        client, alice_token, project["id"], title="Bob's Task", assignee_id=2
+        client, alice_token, project["id"], title="Bob's Task", assignee_ids=[2]
     )
 
     response = await client.patch(
@@ -458,7 +472,7 @@ async def test_update_task_member_cannot_update_forbidden_fields(client: AsyncCl
     await add_member(client, alice_token, project["id"], user_id=2, role="member")
 
     task = await create_task(
-        client, alice_token, project["id"], title="Task", assignee_id=2
+        client, alice_token, project["id"], title="Task", assignee_ids=[2]
     )
 
     response = await client.patch(
@@ -744,3 +758,85 @@ async def test_reorder_task_invalid_status_returns_404(client: AsyncClient):
         headers=auth_headers(alice_token),
     )
     assert response.status_code == 404
+
+
+# --- Assignees ---
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_filter_by_assignee(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], user_id=2)
+
+    await create_task(
+        client, alice_token, project["id"], title="Assigned to Bob", assignee_ids=[2]
+    )
+    await create_task(client, alice_token, project["id"], title="Unassigned")
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        params={"assignee_id": 2},
+        headers=auth_headers(alice_token),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Assigned to Bob"
+
+
+@pytest.mark.asyncio
+async def test_update_task_add_and_remove_assignees(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], user_id=2)
+
+    task = await create_task(client, alice_token, project["id"], assignee_ids=[2])
+    assert len(task["assignees"]) == 1
+
+    # Remove Bob, add Alice (user id=1)
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"assignee_ids": [1]},
+        headers=auth_headers(alice_token),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["assignees"]) == 1
+    assert data["assignees"][0]["id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_update_task_clear_all_assignees(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], user_id=2)
+
+    task = await create_task(client, alice_token, project["id"], assignee_ids=[2])
+    assert len(task["assignees"]) == 1
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"assignee_ids": []},
+        headers=auth_headers(alice_token),
+    )
+    assert response.status_code == 200
+    assert response.json()["assignees"] == []
+
+
+@pytest.mark.asyncio
+async def test_update_task_assignee_not_member_forbidden(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, USER_BOB)  # Bob exists but not in project
+    project = await create_project(client, alice_token)
+    task = await create_task(client, alice_token, project["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"assignee_ids": [2]},
+        headers=auth_headers(alice_token),
+    )
+    assert response.status_code == 403

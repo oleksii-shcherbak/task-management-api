@@ -81,7 +81,11 @@ class Task(Base):
         "TaskAssignee", back_populates="task", cascade="all, delete-orphan"
     )
     assignees: Mapped[list[User]] = relationship(
-        "User", secondary="task_assignees", viewonly=True
+        "User",
+        secondary="task_assignees",
+        primaryjoin="Task.id == TaskAssignee.task_id",
+        secondaryjoin="TaskAssignee.user_id == User.id",
+        viewonly=True,
     )
     comments: Mapped[list[Comment]] = relationship(
         "Comment", back_populates="task", cascade="all, delete-orphan"

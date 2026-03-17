@@ -389,7 +389,7 @@ async def test_assignee_change_activity_logged(client: AsyncClient):
 
     await client.patch(
         f"/api/v1/tasks/{task['id']}",
-        json={"assignee_id": bob_id},
+        json={"assignee_ids": [bob_id]},
         headers=auth_headers(alice_token),
     )
 
@@ -399,6 +399,6 @@ async def test_assignee_change_activity_logged(client: AsyncClient):
     )
 
     logs = response.json()
-    assignee_log = next(log for log in logs if log["action"] == "assignee_changed")
+    assignee_log = next(log for log in logs if log["action"] == "assignee_added")
     assert assignee_log["old_value"] is None  # task was created unassigned
     assert assignee_log["new_value"] == "Bob"
