@@ -36,11 +36,21 @@ async def test_register_success(client: AsyncClient):
 
     assert response.status_code == 201
     data = response.json()
-    assert data["message"] == "Registration successful"
-    assert data["user"]["email"] == VALID_USER["email"]
-    assert data["user"]["name"] == VALID_USER["name"]
-    assert "password_hash" not in data["user"]
-    assert "id" in data["user"]
+    assert "access_token" in data
+    assert "refresh_token" in data
+    assert data["token_type"] == "bearer"
+
+
+@pytest.mark.asyncio
+async def test_register_token_is_immediately_usable(client: AsyncClient):
+    tokens = await register_user(client)
+
+    me = await client.get(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert me.status_code == 200
+    assert me.json()["email"] == VALID_USER["email"]
 
 
 @pytest.mark.asyncio

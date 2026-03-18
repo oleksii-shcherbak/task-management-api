@@ -19,13 +19,12 @@ USER_BOB = {
 
 async def register_and_login(client: AsyncClient, user: dict) -> tuple[str, int]:
     """Register a user and return (access_token, user_id)."""
-    reg = await client.post("/api/v1/auth/register", json=user)
-    user_id = reg.json()["user"]["id"]
-    response = await client.post(
-        "/api/v1/auth/login",
-        json={"email": user["email"], "password": user["password"]},
+    tokens = (await client.post("/api/v1/auth/register", json=user)).json()
+    access_token = tokens["access_token"]
+    me = await client.get(
+        "/api/v1/users/me", headers={"Authorization": f"Bearer {access_token}"}
     )
-    return response.json()["access_token"], user_id
+    return access_token, me.json()["id"]
 
 
 def auth_headers(token: str) -> dict:
