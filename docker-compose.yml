@@ -1,6 +1,7 @@
 services:
   api:
     build: .
+    image: taskapi:latest
     ports:
       - "8000:8000"
     environment:
