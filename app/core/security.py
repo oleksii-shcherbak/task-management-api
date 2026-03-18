@@ -23,23 +23,14 @@ def hash_password(plain_password: str) -> str:
     ).decode("utf-8")
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verify a plain-text password against a hashed password.
-
-    Args:
-        plain_password: The plain-text password to verify
-        hashed_password: The stored hash from the database
-
-    Returns:
-        True if password matches, False otherwise
-    """
+def verify_password(plain_password: str, hashed_password: str | None) -> bool:
+    if hashed_password is None:
+        return False
     try:
         return bcrypt.checkpw(
             plain_password.encode("utf-8"), hashed_password.encode("utf-8")
         )
     except ValueError:
-        # This can happen if the hashed_password is not a valid bcrypt hash
         return False
 
 
@@ -93,6 +84,22 @@ def generate_refresh_token() -> str:
         A URL-safe random token (43 characters, 256 bits of entropy)
     """
     return secrets.token_urlsafe(32)
+
+
+def create_state_token() -> str:
+    """Short-lived JWT used as the OAuth `state` parameter for CSRF protection."""
+    return create_access_token(
+        {"type": "oauth_state"}, expires_delta=timedelta(minutes=10)
+    )
+
+
+def verify_state_token(state: str) -> bool:
+    """Return True if the state value is a valid, unexpired OAuth state JWT."""
+    try:
+        payload = decode_access_token(state)
+        return payload.get("type") == "oauth_state"
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return False
 
 
 def hash_token(plain_token: str) -> str:

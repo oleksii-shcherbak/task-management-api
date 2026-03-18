@@ -12,6 +12,8 @@ from app.database import Base
 if TYPE_CHECKING:
     from app.models.activity_log import ActivityLog
     from app.models.comment import Comment
+    from app.models.email_verification_token import EmailVerificationToken
+    from app.models.oauth_account import OAuthAccount
     from app.models.project import Project
     from app.models.project_member import ProjectMember
     from app.models.refresh_token import RefreshToken
@@ -38,7 +40,8 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # None for OAuth-only users who have no password
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole),
@@ -101,6 +104,14 @@ class User(Base):
 
     activity_logs: Mapped[list[ActivityLog]] = relationship(
         "ActivityLog", back_populates="actor"
+    )
+
+    oauth_accounts: Mapped[list[OAuthAccount]] = relationship(
+        "OAuthAccount", back_populates="user", cascade="all, delete-orphan"
+    )
+
+    email_verification_tokens: Mapped[list[EmailVerificationToken]] = relationship(
+        "EmailVerificationToken", back_populates="user", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
