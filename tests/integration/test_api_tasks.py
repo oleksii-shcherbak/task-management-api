@@ -203,8 +203,8 @@ async def test_list_tasks_only_shows_project_tasks(client: AsyncClient):
     )
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 2
-    assert all(t["project_id"] == project_a["id"] for t in data)
+    assert len(data["items"]) == 2
+    assert all(t["project_id"] == project_a["id"] for t in data["items"])
 
 
 @pytest.mark.asyncio
@@ -229,8 +229,8 @@ async def test_list_tasks_filter_by_status(client: AsyncClient):
     )
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 1
-    assert data[0]["title"] == "Backlog Task"
+    assert len(data["items"]) == 1
+    assert data["items"][0]["title"] == "Backlog Task"
 
 
 @pytest.mark.asyncio
@@ -249,8 +249,8 @@ async def test_list_tasks_filter_by_priority(client: AsyncClient):
     )
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 1
-    assert data[0]["title"] == "High"
+    assert len(data["items"]) == 1
+    assert data["items"][0]["title"] == "High"
 
 
 @pytest.mark.asyncio
@@ -279,7 +279,7 @@ async def test_list_tasks_excludes_deleted(client: AsyncClient):
         headers=auth_headers(token),
     )
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["items"] == []
 
 
 @pytest.mark.asyncio
@@ -303,7 +303,7 @@ async def test_list_tasks_ordered_by_status_then_position(client: AsyncClient):
         headers=auth_headers(token),
     )
     data = response.json()
-    ids = [t["id"] for t in data]
+    ids = [t["id"] for t in data["items"]]
 
     # Both Backlog tasks must appear before the In Progress task
     assert ids.index(t1["id"]) < ids.index(t2["id"])
@@ -531,7 +531,7 @@ async def test_delete_task_soft_deletes(client: AsyncClient):
     list_response = await client.get(
         f"/api/v1/projects/{project['id']}/tasks", headers=auth_headers(token)
     )
-    assert list_response.json() == []
+    assert list_response.json()["items"] == []
 
     get_response = await client.get(
         f"/api/v1/tasks/{task['id']}", headers=auth_headers(token)
@@ -592,7 +592,7 @@ async def test_reorder_task_move_up_same_column(client: AsyncClient):
             params={"status_id": backlog_id},
             headers=auth_headers(token),
         )
-    ).json()
+    ).json()["items"]
     positions = {t["id"]: t["position"] for t in tasks}
     assert positions[t4["id"]] == 1
     assert positions[t1["id"]] == 2
@@ -627,7 +627,7 @@ async def test_reorder_task_move_down_same_column(client: AsyncClient):
             params={"status_id": backlog_id},
             headers=auth_headers(token),
         )
-    ).json()
+    ).json()["items"]
     positions = {t["id"]: t["position"] for t in tasks}
     assert positions[t2["id"]] == 1
     assert positions[t3["id"]] == 2
@@ -667,7 +667,7 @@ async def test_reorder_task_different_column(client: AsyncClient):
             params={"status_id": backlog_id},
             headers=auth_headers(token),
         )
-    ).json()
+    ).json()["items"]
     bp = {t["id"]: t["position"] for t in backlog}
     assert len(backlog) == 2
     assert bp[t1["id"]] == 1
@@ -680,7 +680,7 @@ async def test_reorder_task_different_column(client: AsyncClient):
             params={"status_id": in_progress_id},
             headers=auth_headers(token),
         )
-    ).json()
+    ).json()["items"]
     ipp = {t["id"]: t["position"] for t in ip}
     assert len(ip) == 2
     assert ipp[t3["id"]] == 1
@@ -782,8 +782,8 @@ async def test_list_tasks_filter_by_assignee(client: AsyncClient):
     )
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 1
-    assert data[0]["title"] == "Assigned to Bob"
+    assert len(data["items"]) == 1
+    assert data["items"][0]["title"] == "Assigned to Bob"
 
 
 @pytest.mark.asyncio
@@ -840,3 +840,92 @@ async def test_update_task_assignee_not_member_forbidden(client: AsyncClient):
         headers=auth_headers(alice_token),
     )
     assert response.status_code == 403
+
+
+# --- Pagination ---
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_pagination(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    for i in range(3):
+        await create_task(client, token, project["id"], title=f"Task {i}")
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        params={"limit": 2},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    page1 = response.json()
+    assert len(page1["items"]) == 2
+    assert page1["has_more"] is True
+    assert page1["next_cursor"] is not None
+
+    response2 = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        params={"limit": 2, "cursor": page1["next_cursor"]},
+        headers=auth_headers(token),
+    )
+    assert response2.status_code == 200
+    page2 = response2.json()
+    assert len(page2["items"]) == 1
+    assert page2["has_more"] is False
+    assert page2["next_cursor"] is None
+
+    ids1 = {t["id"] for t in page1["items"]}
+    ids2 = {t["id"] for t in page2["items"]}
+    assert ids1.isdisjoint(ids2)
+    assert len(ids1 | ids2) == 3
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_pagination_with_filter(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    backlog_id = statuses["Backlog"]["id"]
+
+    for i in range(3):
+        await create_task(client, token, project["id"], title=f"Backlog {i}")
+    # One task in a different status — should not appear
+    await create_task(
+        client,
+        token,
+        project["id"],
+        title="In Progress",
+        status_id=statuses["In Progress"]["id"],
+    )
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        params={"status_id": backlog_id, "limit": 2},
+        headers=auth_headers(token),
+    )
+    page1 = response.json()
+    assert len(page1["items"]) == 2
+    assert page1["has_more"] is True
+
+    response2 = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        params={"status_id": backlog_id, "limit": 2, "cursor": page1["next_cursor"]},
+        headers=auth_headers(token),
+    )
+    page2 = response2.json()
+    assert len(page2["items"]) == 1
+    assert page2["has_more"] is False
+    assert all(t["status"]["id"] == backlog_id for t in page2["items"])
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_invalid_cursor_returns_422(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks",
+        params={"cursor": "not-valid-base64!!!"},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 422

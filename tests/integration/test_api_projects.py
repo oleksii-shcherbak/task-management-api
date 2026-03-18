@@ -88,8 +88,8 @@ async def test_list_projects_returns_own_projects(client: AsyncClient):
 
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 2
-    names = {p["name"] for p in data}
+    assert len(data["items"]) == 2
+    names = {p["name"] for p in data["items"]}
     assert names == {"Project A", "Project B"}
 
 
@@ -108,8 +108,8 @@ async def test_list_projects_excludes_other_users_projects(client: AsyncClient):
 
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 1
-    assert data[0]["name"] == "Alice's Project"
+    assert len(data["items"]) == 1
+    assert data["items"][0]["name"] == "Alice's Project"
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_delete_project_soft_deletes(client: AsyncClient):
         headers=await auth_headers(token),
     )
     assert list_response.status_code == 200
-    assert list_response.json() == []
+    assert list_response.json()["items"] == []
 
 
 @pytest.mark.asyncio
@@ -293,3 +293,67 @@ async def test_cannot_remove_owner(client: AsyncClient):
         headers=await auth_headers(token),
     )
     assert response.status_code == 403
+
+
+# --- Pagination ---
+
+
+@pytest.mark.asyncio
+async def test_list_projects_pagination(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    for i in range(3):
+        await create_project(client, token, f"Project {i}")
+
+    response = await client.get(
+        "/api/v1/projects",
+        params={"limit": 2},
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 200
+    page1 = response.json()
+    assert len(page1["items"]) == 2
+    assert page1["has_more"] is True
+    assert page1["next_cursor"] is not None
+
+    response2 = await client.get(
+        "/api/v1/projects",
+        params={"limit": 2, "cursor": page1["next_cursor"]},
+        headers=await auth_headers(token),
+    )
+    assert response2.status_code == 200
+    page2 = response2.json()
+    assert len(page2["items"]) == 1
+    assert page2["has_more"] is False
+    assert page2["next_cursor"] is None
+
+    ids1 = {p["id"] for p in page1["items"]}
+    ids2 = {p["id"] for p in page2["items"]}
+    assert ids1.isdisjoint(ids2)
+    assert len(ids1 | ids2) == 3
+
+
+@pytest.mark.asyncio
+async def test_list_projects_no_more_pages(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    await create_project(client, token, "Only Project")
+
+    response = await client.get(
+        "/api/v1/projects",
+        params={"limit": 20},
+        headers=await auth_headers(token),
+    )
+    data = response.json()
+    assert data["has_more"] is False
+    assert data["next_cursor"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_projects_invalid_cursor_returns_422(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.get(
+        "/api/v1/projects",
+        params={"cursor": "not-valid-base64!!!"},
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 422

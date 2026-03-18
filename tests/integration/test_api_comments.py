@@ -150,10 +150,10 @@ async def test_list_comments(client: AsyncClient):
 
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 2
+    assert len(data["items"]) == 2
     # Ordered by created_at asc
-    assert data[0]["content"] == "First"
-    assert data[1]["content"] == "Second"
+    assert data["items"][0]["content"] == "First"
+    assert data["items"][1]["content"] == "Second"
 
 
 @pytest.mark.asyncio
@@ -402,3 +402,57 @@ async def test_assignee_change_activity_logged(client: AsyncClient):
     assignee_log = next(log for log in logs if log["action"] == "assignee_added")
     assert assignee_log["old_value"] is None  # task was created unassigned
     assert assignee_log["new_value"] == "Bob"
+
+
+# --- Pagination ---
+
+
+@pytest.mark.asyncio
+async def test_list_comments_pagination(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    for i in range(3):
+        await add_comment(client, token, project["id"], task["id"], f"Comment {i}")
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        params={"limit": 2},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    page1 = response.json()
+    assert len(page1["items"]) == 2
+    assert page1["has_more"] is True
+    assert page1["next_cursor"] is not None
+
+    response2 = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        params={"limit": 2, "cursor": page1["next_cursor"]},
+        headers=auth_headers(token),
+    )
+    assert response2.status_code == 200
+    page2 = response2.json()
+    assert len(page2["items"]) == 1
+    assert page2["has_more"] is False
+    assert page2["next_cursor"] is None
+
+    ids1 = {c["id"] for c in page1["items"]}
+    ids2 = {c["id"] for c in page2["items"]}
+    assert ids1.isdisjoint(ids2)
+    assert len(ids1 | ids2) == 3
+
+
+@pytest.mark.asyncio
+async def test_list_comments_invalid_cursor_returns_422(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        params={"cursor": "not-valid-base64!!!"},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 422
