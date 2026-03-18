@@ -1,11 +1,16 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_member_or_403, get_project_or_404
-from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.core.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
 from app.database import get_db
 from app.models.project import Project
 from app.models.project_member import ProjectMember, ProjectRole
@@ -20,6 +25,7 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.schemas.task import TaskStatusResponse
+from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -94,12 +100,20 @@ async def list_project_statuses(
     return list(result.scalars().all())
 
 
-@router.get("", response_model=list[ProjectResponse])
+@router.get("", response_model=CursorPage[ProjectResponse])
 async def list_projects(
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[Project]:
-    result = await db.execute(
+) -> CursorPage[ProjectResponse]:
+    cursor_data: dict | None = None
+    if cursor is not None:
+        cursor_data = decode_cursor(cursor)
+        if cursor_data is None:
+            raise ValidationError("Invalid cursor")
+
+    query = (
         select(Project)
         .join(ProjectMember, ProjectMember.project_id == Project.id)
         .where(
@@ -107,7 +121,31 @@ async def list_projects(
             Project.deleted_at.is_(None),
         )
     )
-    return list(result.scalars().all())
+
+    if cursor_data is not None:
+        cursor_created_at = datetime.fromisoformat(cursor_data["created_at"])
+        query = query.where(
+            tuple_(Project.created_at, Project.id)
+            > (cursor_created_at, cursor_data["id"])
+        )
+
+    query = query.order_by(Project.created_at.asc(), Project.id.asc()).limit(limit + 1)
+
+    result = await db.execute(query)
+    projects = list(result.scalars().all())
+
+    has_more = len(projects) > limit
+    if has_more:
+        projects = projects[:limit]
+
+    next_cursor: str | None = None
+    if has_more:
+        last = projects[-1]
+        next_cursor = encode_cursor(
+            {"created_at": last.created_at.isoformat(), "id": last.id}
+        )
+
+    return CursorPage(items=projects, next_cursor=next_cursor, has_more=has_more)
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +17,7 @@ from app.models.user import User
 from app.schemas.activity_log import ActivityLogResponse
 from app.schemas.task import TaskCreate, TaskReorder, TaskResponse, TaskUpdate
 from app.services import task_service
+from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 
 project_tasks_router = APIRouter(prefix="/projects", tags=["tasks"])
 tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -149,17 +150,27 @@ async def create_task(
 # --- List tasks ---
 
 
-@project_tasks_router.get("/{project_id}/tasks", response_model=list[TaskResponse])
+@project_tasks_router.get(
+    "/{project_id}/tasks", response_model=CursorPage[TaskResponse]
+)
 async def list_tasks(
     project_id: int,
     status_id: int | None = Query(default=None),
     priority: TaskPriority | None = Query(default=None),
     assignee_id: int | None = Query(default=None),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[Task]:
+) -> CursorPage[TaskResponse]:
     await get_project_or_404(project_id, db)
     await get_member_or_403(project_id, current_user.id, db)
+
+    cursor_data: dict | None = None
+    if cursor is not None:
+        cursor_data = decode_cursor(cursor)
+        if cursor_data is None:
+            raise ValidationError("Invalid cursor")
 
     query = (
         select(Task)
@@ -179,10 +190,31 @@ async def list_tasks(
             Task.task_assignees.any(TaskAssignee.user_id == assignee_id)
         )
 
-    query = query.order_by(Task.status_id.asc(), Task.position.asc())
+    if cursor_data is not None:
+        query = query.where(
+            tuple_(Task.status_id, Task.position, Task.id)
+            > (cursor_data["status_id"], cursor_data["position"], cursor_data["id"])
+        )
+
+    query = query.order_by(
+        Task.status_id.asc(), Task.position.asc(), Task.id.asc()
+    ).limit(limit + 1)
 
     result = await db.execute(query)
-    return list(result.scalars().all())
+    tasks = list(result.scalars().all())
+
+    has_more = len(tasks) > limit
+    if has_more:
+        tasks = tasks[:limit]
+
+    next_cursor: str | None = None
+    if has_more:
+        last = tasks[-1]
+        next_cursor = encode_cursor(
+            {"status_id": last.status_id, "position": last.position, "id": last.id}
+        )
+
+    return CursorPage(items=tasks, next_cursor=next_cursor, has_more=has_more)
 
 
 # --- Get task ---

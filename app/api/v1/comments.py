@@ -1,18 +1,19 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, get_member_or_403, get_project_or_404
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.database import get_db
 from app.models.comment import Comment
 from app.models.project_member import ProjectRole
 from app.models.task import Task
 from app.models.user import User
 from app.schemas.comment import CommentCreate, CommentResponse, CommentUpdate
+from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 
 # Routes that need project + task context: /projects/{project_id}/tasks/{task_id}/comments
 project_tasks_router = APIRouter()
@@ -80,25 +81,56 @@ async def add_comment(
 
 @project_tasks_router.get(
     "/{project_id}/tasks/{task_id}/comments",
-    response_model=list[CommentResponse],
+    response_model=CursorPage[CommentResponse],
 )
 async def list_comments(
     project_id: int,
     task_id: int,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> CursorPage[CommentResponse]:
     await get_project_or_404(project_id, db)
     await get_member_or_403(project_id, current_user.id, db)
     await get_task_or_404(task_id, project_id, db)
 
-    result = await db.execute(
+    cursor_data: dict | None = None
+    if cursor is not None:
+        cursor_data = decode_cursor(cursor)
+        if cursor_data is None:
+            raise ValidationError("Invalid cursor")
+
+    query = (
         select(Comment)
         .where(Comment.task_id == task_id)
         .options(selectinload(Comment.author))
-        .order_by(Comment.created_at.asc())
     )
-    return result.scalars().all()
+
+    if cursor_data is not None:
+        cursor_created_at = datetime.fromisoformat(cursor_data["created_at"])
+        query = query.where(
+            tuple_(Comment.created_at, Comment.id)
+            > (cursor_created_at, cursor_data["id"])
+        )
+
+    query = query.order_by(Comment.created_at.asc(), Comment.id.asc()).limit(limit + 1)
+
+    result = await db.execute(query)
+    comments = list(result.scalars().all())
+
+    has_more = len(comments) > limit
+    if has_more:
+        comments = comments[:limit]
+
+    next_cursor: str | None = None
+    if has_more:
+        last = comments[-1]
+        next_cursor = encode_cursor(
+            {"created_at": last.created_at.isoformat(), "id": last.id}
+        )
+
+    return CursorPage(items=comments, next_cursor=next_cursor, has_more=has_more)
 
 
 @comments_router.patch("/{comment_id}", response_model=CommentResponse)
