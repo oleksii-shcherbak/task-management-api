@@ -24,6 +24,7 @@ dev = [
     "httpx~=0.28.0",
     "ruff~=0.15.0",
     "pre-commit~=4.5.1",
+    "pip-audit>=2.0.0",
 ]
 
 [tool.ruff]
@@ -55,6 +56,7 @@ select = [
     "C4", # flake8-comprehensions
     "DTZ", # flake8-datetimez
     "T10", # flake8-debugger
+    "S", # flake8-bandit (security)
     "PL", # pylint
     "RUF", # Ruff-specific rules
 ]
@@ -74,7 +76,9 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "PLR2004",
-    "S101",
+    "S101", # assert statements are intentional in tests
+    "S105", # hardcoded test passwords are intentional
+    "S106",
 ]
 
 [tool.ruff.format]
