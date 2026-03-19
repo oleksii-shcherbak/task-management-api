@@ -60,6 +60,17 @@ async def test_register_token_is_immediately_usable(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_register_user_is_active(client: AsyncClient):
+    tokens = await register_user(client)
+
+    me = await client.get(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert me.json()["is_active"] is True
+
+
+@pytest.mark.asyncio
 async def test_register_duplicate_email_returns_409(client: AsyncClient):
     await register_user(client)
     response = await client.post("/api/v1/auth/register", json=VALID_USER)

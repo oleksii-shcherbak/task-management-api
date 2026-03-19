@@ -58,6 +58,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         email=data.email,
         password_hash=hash_password(data.password),
         name=data.name,
+        is_active=True,
         password_changed_at=datetime.now(UTC),
     )
     db.add(user)
