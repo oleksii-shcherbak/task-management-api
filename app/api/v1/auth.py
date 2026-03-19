@@ -1,13 +1,20 @@
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
 
 import structlog
 from fastapi import APIRouter, Depends
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.config import settings
-from app.core.exceptions import ConflictError, NotFoundError, UnauthorizedError
+from app.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    UnauthorizedError,
+    ValidationError,
+)
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
@@ -17,14 +24,17 @@ from app.core.security import (
 )
 from app.database import get_db
 from app.models.email_verification_token import EmailVerificationToken
+from app.models.oauth_account import OAuthAccount, OAuthProvider
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.auth import (
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    SetPasswordRequest,
     TokenResponse,
 )
+from app.services.github import exchange_code_for_token, fetch_github_profile
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -182,3 +192,102 @@ async def resend_verification(
     logger.info("verification_email_queued", user_id=current_user.id, token=plain_token)
 
     return {"message": "Verification email sent"}
+
+
+@router.get("/github")
+async def github_oauth_redirect():
+    params = urlencode(
+        {
+            "client_id": settings.GITHUB_CLIENT_ID,
+            "redirect_uri": settings.GITHUB_REDIRECT_URI,
+            "scope": "user:email",
+        }
+    )
+    return RedirectResponse(f"https://github.com/login/oauth/authorize?{params}")
+
+
+@router.get("/github/callback", response_model=TokenResponse)
+async def github_oauth_callback(code: str, db: AsyncSession = Depends(get_db)):
+    github_token = await exchange_code_for_token(
+        code,
+        settings.GITHUB_CLIENT_ID,
+        settings.GITHUB_CLIENT_SECRET,
+        settings.GITHUB_REDIRECT_URI,
+    )
+    profile = await fetch_github_profile(github_token)
+
+    github_id = str(profile["id"])
+    email = profile.get("email")
+    name = profile.get("name") or profile.get("login") or email
+
+    if not email:
+        raise ValidationError("GitHub account has no accessible email address")
+
+    result = await db.execute(
+        select(OAuthAccount).where(
+            OAuthAccount.provider == OAuthProvider.GITHUB,
+            OAuthAccount.provider_user_id == github_id,
+        )
+    )
+    oauth_account = result.scalar_one_or_none()
+
+    if oauth_account:
+        oauth_account.access_token = github_token
+        response = _prepare_token_response(oauth_account.user_id, db)
+        await db.commit()
+        return response
+
+    result = await db.execute(
+        select(User).where(User.email == email, User.deleted_at.is_(None))
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        user = User(
+            email=email,
+            name=name,
+            is_active=True,
+            is_verified=True,
+            password_changed_at=datetime.now(UTC),
+        )
+        db.add(user)
+        await db.flush()
+    else:
+        user.is_verified = True
+
+    db.add(
+        OAuthAccount(
+            user_id=user.id,
+            provider=OAuthProvider.GITHUB,
+            provider_user_id=github_id,
+            provider_email=email,
+            access_token=github_token,
+        )
+    )
+    response = _prepare_token_response(user.id, db)
+    await db.commit()
+    return response
+
+
+@router.post("/set-password", status_code=204)
+async def set_password(
+    data: SetPasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.password_hash is not None:
+        raise ConflictError(
+            "Account already has a password — use change-password instead"
+        )
+
+    current_user.password_hash = hash_password(data.password)
+    current_user.password_changed_at = datetime.now(UTC)
+
+    await db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == current_user.id, RefreshToken.is_revoked.is_(False)
+        )
+        .values(is_revoked=True)
+    )
+    await db.commit()

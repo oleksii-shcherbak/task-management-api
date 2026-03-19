@@ -1,9 +1,11 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import UnauthorizedError
 from app.core.security import hash_token
 from app.models.email_verification_token import EmailVerificationToken
 
@@ -388,3 +390,261 @@ async def test_resend_verification_already_verified_returns_409(
 async def test_resend_verification_requires_auth(client: AsyncClient):
     response = await client.post("/api/v1/auth/resend-verification")
     assert response.status_code == 401
+
+
+# --- GitHub OAuth ---
+
+
+GITHUB_PROFILE = {
+    "id": 12345,
+    "login": "octocat",
+    "name": "The Octocat",
+    "email": "octocat@github.com",
+}
+
+
+@pytest.mark.asyncio
+async def test_github_redirect_returns_302(client: AsyncClient):
+    response = await client.get("/api/v1/auth/github", follow_redirects=False)
+    assert response.status_code in (302, 307)
+    assert "github.com/login/oauth/authorize" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_github_callback_new_user_returns_tokens(client: AsyncClient):
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value=GITHUB_PROFILE),
+        ),
+    ):
+        response = await client.get("/api/v1/auth/github/callback?code=testcode")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
+    assert "refresh_token" in data
+
+
+@pytest.mark.asyncio
+async def test_github_callback_new_user_is_verified(client: AsyncClient):
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value=GITHUB_PROFILE),
+        ),
+    ):
+        tokens = (await client.get("/api/v1/auth/github/callback?code=testcode")).json()
+
+    me = await client.get(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert me.json()["is_verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_github_callback_existing_account_logs_in(client: AsyncClient):
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value=GITHUB_PROFILE),
+        ),
+    ):
+        first = await client.get("/api/v1/auth/github/callback?code=code1")
+    assert first.status_code == 200
+
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token2"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value=GITHUB_PROFILE),
+        ),
+    ):
+        second = await client.get("/api/v1/auth/github/callback?code=code2")
+    assert second.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_github_callback_links_existing_email_user(client: AsyncClient):
+    await register_user(client, {**VALID_USER, "email": GITHUB_PROFILE["email"]})
+
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value=GITHUB_PROFILE),
+        ),
+    ):
+        response = await client.get("/api/v1/auth/github/callback?code=testcode")
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_github_callback_links_existing_user_sets_verified(client: AsyncClient):
+    tokens = await register_user(
+        client, {**VALID_USER, "email": GITHUB_PROFILE["email"]}
+    )
+    me_before = await client.get(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert me_before.json()["is_verified"] is False
+
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value=GITHUB_PROFILE),
+        ),
+    ):
+        oauth_tokens = (
+            await client.get("/api/v1/auth/github/callback?code=testcode")
+        ).json()
+
+    me_after = await client.get(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {oauth_tokens['access_token']}"},
+    )
+    assert me_after.json()["is_verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_github_callback_invalid_code_returns_401(client: AsyncClient):
+    with patch(
+        "app.api.v1.auth.exchange_code_for_token",
+        new=AsyncMock(side_effect=UnauthorizedError("invalid code")),
+    ):
+        response = await client.get("/api/v1/auth/github/callback?code=badcode")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_github_callback_no_email_returns_422(client: AsyncClient):
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value={**GITHUB_PROFILE, "email": None}),
+        ),
+    ):
+        response = await client.get("/api/v1/auth/github/callback?code=testcode")
+    assert response.status_code == 422
+
+
+# --- Set Password ---
+
+
+@pytest.mark.asyncio
+async def test_set_password_success(client: AsyncClient):
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value=GITHUB_PROFILE),
+        ),
+    ):
+        tokens = (await client.get("/api/v1/auth/github/callback?code=testcode")).json()
+
+    response = await client.post(
+        "/api/v1/auth/set-password",
+        json={"password": "newpassword123"},
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_set_password_allows_subsequent_email_login(client: AsyncClient):
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value=GITHUB_PROFILE),
+        ),
+    ):
+        tokens = (await client.get("/api/v1/auth/github/callback?code=testcode")).json()
+
+    await client.post(
+        "/api/v1/auth/set-password",
+        json={"password": "newpassword123"},
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": GITHUB_PROFILE["email"], "password": "newpassword123"},
+    )
+    assert login_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_set_password_already_has_password_returns_409(client: AsyncClient):
+    tokens = await register_user(client)
+
+    response = await client.post(
+        "/api/v1/auth/set-password",
+        json={"password": "newpassword123"},
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_set_password_requires_auth(client: AsyncClient):
+    response = await client.post(
+        "/api/v1/auth/set-password", json={"password": "newpassword123"}
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_set_password_short_password_returns_422(client: AsyncClient):
+    with (
+        patch(
+            "app.api.v1.auth.exchange_code_for_token",
+            new=AsyncMock(return_value="gh_token"),
+        ),
+        patch(
+            "app.api.v1.auth.fetch_github_profile",
+            new=AsyncMock(return_value=GITHUB_PROFILE),
+        ),
+    ):
+        tokens = (await client.get("/api/v1/auth/github/callback?code=testcode")).json()
+
+    response = await client.post(
+        "/api/v1/auth/set-password",
+        json={"password": "short"},
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert response.status_code == 422
