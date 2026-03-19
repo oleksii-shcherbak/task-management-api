@@ -1,5 +1,11 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.security import hash_token
+from app.models.email_verification_token import EmailVerificationToken
 
 VALID_USER = {
     "email": "alice@example.com",
@@ -229,3 +235,145 @@ async def test_logout_twice_both_return_204(client: AsyncClient):
 
     assert first.status_code == 204
     assert second.status_code == 204
+
+
+# --- Email Verification ---
+
+
+@pytest.mark.asyncio
+async def test_verify_email_success(client: AsyncClient, db_session: AsyncSession):
+    tokens = await register_user(client)
+    me = await client.get(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    user_id = me.json()["id"]
+
+    plain_token = "validtesttoken123"
+    db_session.add(
+        EmailVerificationToken(
+            token_hash=hash_token(plain_token),
+            user_id=user_id,
+            expires_at=datetime.now(UTC) + timedelta(hours=24),
+        )
+    )
+    await db_session.commit()
+
+    response = await client.get(f"/api/v1/auth/verify-email?token={plain_token}")
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Email verified successfully"
+
+    me = await client.get(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert me.json()["is_verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_verify_email_invalid_token_returns_404(client: AsyncClient):
+    response = await client.get("/api/v1/auth/verify-email?token=doesnotexist")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_verify_email_expired_token_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    tokens = await register_user(client)
+    user_id = (
+        await client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+    ).json()["id"]
+
+    plain_token = "expiredtoken123"
+    db_session.add(
+        EmailVerificationToken(
+            token_hash=hash_token(plain_token),
+            user_id=user_id,
+            expires_at=datetime.now(UTC) - timedelta(hours=1),
+        )
+    )
+    await db_session.commit()
+
+    response = await client.get(f"/api/v1/auth/verify-email?token={plain_token}")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_verify_email_already_used_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    tokens = await register_user(client)
+    user_id = (
+        await client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+    ).json()["id"]
+
+    plain_token = "alreadyusedtoken"
+    db_session.add(
+        EmailVerificationToken(
+            token_hash=hash_token(plain_token),
+            user_id=user_id,
+            expires_at=datetime.now(UTC) + timedelta(hours=24),
+            used_at=datetime.now(UTC),
+        )
+    )
+    await db_session.commit()
+
+    response = await client.get(f"/api/v1/auth/verify-email?token={plain_token}")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_success(client: AsyncClient):
+    tokens = await register_user(client)
+
+    response = await client.post(
+        "/api/v1/auth/resend-verification",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Verification email sent"
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_already_verified_returns_409(
+    client: AsyncClient, db_session: AsyncSession
+):
+    tokens = await register_user(client)
+    user_id = (
+        await client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+    ).json()["id"]
+
+    plain_token = "directverifytoken"
+    db_session.add(
+        EmailVerificationToken(
+            token_hash=hash_token(plain_token),
+            user_id=user_id,
+            expires_at=datetime.now(UTC) + timedelta(hours=24),
+        )
+    )
+    await db_session.commit()
+    await client.get(f"/api/v1/auth/verify-email?token={plain_token}")
+
+    response = await client.post(
+        "/api/v1/auth/resend-verification",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_requires_auth(client: AsyncClient):
+    response = await client.post("/api/v1/auth/resend-verification")
+    assert response.status_code == 401
