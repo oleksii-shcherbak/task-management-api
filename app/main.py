@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.auth import router as auth_router
@@ -27,6 +28,12 @@ app = FastAPI(
 setup_logging()
 
 logger = structlog.get_logger()
+
+app.mount(
+    f"/{settings.UPLOAD_DIR}",
+    StaticFiles(directory=settings.UPLOAD_DIR, check_dir=False),
+    name="uploads",
+)
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):

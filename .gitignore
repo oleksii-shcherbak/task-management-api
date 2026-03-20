@@ -110,6 +110,8 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+uploads/
+
 ### Python template
 # Byte-compiled / optimized / DLL files
 __pycache__/

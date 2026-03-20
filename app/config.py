@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_SECRET: str = ""
     GITHUB_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/github/callback"
 
+    # Storage settings
+    STORAGE_BACKEND: str = "local"  # "local" or "s3"
+    UPLOAD_DIR: str = "uploads"
+
+    # AWS S3 settings (only required when STORAGE_BACKEND=s3)
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_S3_BUCKET: str = ""
+    AWS_S3_REGION: str = "us-east-1"
+    AWS_S3_PRESIGNED_URL_EXPIRES: int = 3600
+
     # Configuration for loading from .env file
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
