@@ -1,4 +1,5 @@
 from app.models.activity_log import ActivityLog
+from app.models.attachment import Attachment
 from app.models.comment import Comment
 from app.models.email_verification_token import EmailVerificationToken
 from app.models.oauth_account import OAuthAccount, OAuthProvider
@@ -12,6 +13,7 @@ from app.models.user import User, UserRole
 
 __all__ = [
     "ActivityLog",
+    "Attachment",
     "Comment",
     "EmailVerificationToken",
     "OAuthAccount",

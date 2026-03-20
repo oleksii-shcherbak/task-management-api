@@ -11,6 +11,7 @@ from app.database import Base
 
 if TYPE_CHECKING:
     from app.models.activity_log import ActivityLog
+    from app.models.attachment import Attachment
     from app.models.comment import Comment
     from app.models.project import Project
     from app.models.task_assignee import TaskAssignee
@@ -92,6 +93,9 @@ class Task(Base):
     )
     activity_logs: Mapped[list[ActivityLog]] = relationship(
         "ActivityLog", back_populates="task"
+    )
+    attachments: Mapped[list[Attachment]] = relationship(
+        "Attachment", back_populates="task", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
