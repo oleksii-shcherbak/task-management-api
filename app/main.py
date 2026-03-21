@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.api.v1.attachments import attachments_router, task_attachments_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.comments import comments_router
 from app.api.v1.comments import project_tasks_router as comments_project_router
@@ -130,6 +131,8 @@ app.include_router(project_tasks_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(comments_project_router, prefix="/api/v1/projects")
 app.include_router(comments_router, prefix="/api/v1/comments")
+app.include_router(task_attachments_router, prefix="/api/v1")
+app.include_router(attachments_router, prefix="/api/v1")
 
 
 @app.get("/")
