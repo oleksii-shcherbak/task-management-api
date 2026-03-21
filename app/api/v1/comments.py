@@ -16,10 +16,10 @@ from app.schemas.comment import CommentCreate, CommentResponse, CommentUpdate
 from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 
 # Routes that need project + task context: /projects/{project_id}/tasks/{task_id}/comments
-project_tasks_router = APIRouter(tags=["comments"])
+project_tasks_router = APIRouter(tags=["Comments"])
 
 # Routes that operate on a single comment directly: /comments/{comment_id}
-comments_router = APIRouter(tags=["comments"])
+comments_router = APIRouter(tags=["Comments"])
 
 
 async def get_comment_or_404(comment_id: int, db: AsyncSession) -> Comment:

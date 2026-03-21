@@ -19,8 +19,8 @@ from app.models.task import Task
 from app.models.user import User
 from app.schemas.attachment import AttachmentResponse
 
-task_attachments_router = APIRouter(prefix="/tasks", tags=["attachments"])
-attachments_router = APIRouter(prefix="/attachments", tags=["attachments"])
+task_attachments_router = APIRouter(prefix="/tasks", tags=["Attachments"])
+attachments_router = APIRouter(prefix="/attachments", tags=["Attachments"])
 
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 

@@ -27,7 +27,7 @@ from app.schemas.project import (
 from app.schemas.task import TaskStatusResponse
 from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 
-router = APIRouter(prefix="/projects", tags=["projects"])
+router = APIRouter(prefix="/projects", tags=["Projects"])
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ProjectResponse)

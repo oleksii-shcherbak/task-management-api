@@ -19,8 +19,8 @@ from app.schemas.task import TaskCreate, TaskReorder, TaskResponse, TaskUpdate
 from app.services import task_service
 from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 
-project_tasks_router = APIRouter(prefix="/projects", tags=["tasks"])
-tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
+project_tasks_router = APIRouter(prefix="/projects", tags=["Tasks"])
+tasks_router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
 
 async def get_task_or_404(task_id: int, db: AsyncSession) -> Task:
