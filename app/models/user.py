@@ -64,6 +64,9 @@ class User(Base):
         DateTime(timezone=True), nullable=True
     )
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Internal storage path (e.g. "avatars/uuid.jpg") - used to delete the old file on replacement.
+    # Kept separate from avatar_url so the URL format can vary by backend.
+    avatar_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

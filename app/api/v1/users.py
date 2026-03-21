@@ -1,12 +1,21 @@
+import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
-from fastapi import APIRouter, Depends
+import filetype
+from fastapi import APIRouter, Depends, UploadFile
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
-from app.core.exceptions import ConflictError, NotFoundError, UnauthorizedError
+from app.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    UnauthorizedError,
+    ValidationError,
+)
 from app.core.security import hash_password, verify_password
+from app.core.storage import StorageService, get_storage_service
 from app.database import get_db
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
@@ -16,6 +25,9 @@ from app.schemas.user import (
     UserResponse,
     UserUpdate,
 )
+
+MAX_AVATAR_BYTES = 2 * 1024 * 1024  # 2 MB
+ALLOWED_AVATAR_MIME_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -75,6 +87,49 @@ async def delete_me(
     db: AsyncSession = Depends(get_db),
 ):
     current_user.deleted_at = datetime.now(UTC)
+    await db.commit()
+
+
+@router.post("/me/avatar", response_model=UserResponse)
+async def upload_avatar(
+    file: UploadFile,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service),
+):
+    data = await file.read()
+    if len(data) > MAX_AVATAR_BYTES:
+        raise ValidationError("Avatar exceeds the 2 MB limit")
+
+    kind = filetype.guess(data)
+    if kind is None or kind.mime not in ALLOWED_AVATAR_MIME_TYPES:
+        raise ValidationError("Avatar must be a JPEG, PNG, GIF, or WebP image")
+
+    if current_user.avatar_path:
+        await storage.delete_file(current_user.avatar_path)
+
+    ext = Path(file.filename or "").suffix.lower() or f".{kind.extension}"
+    storage_path = f"avatars/{uuid.uuid4()}{ext}"
+    await storage.upload_file(data, storage_path)
+
+    current_user.avatar_path = storage_path
+    current_user.avatar_url = storage.get_url(storage_path)
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
+
+
+@router.delete("/me/avatar", status_code=204)
+async def delete_avatar(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service),
+):
+    if current_user.avatar_path:
+        await storage.delete_file(current_user.avatar_path)
+
+    current_user.avatar_path = None
+    current_user.avatar_url = None
     await db.commit()
 
 
