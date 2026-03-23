@@ -31,6 +31,7 @@ class LocalStorageService(StorageService):
 
     async def upload_file(self, data: bytes, filename: str) -> str:
         path = self._base / filename
+        await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
         # Writing to disk is blocking, so run it off the event loop
         await asyncio.to_thread(path.write_bytes, data)
         return filename

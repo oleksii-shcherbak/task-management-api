@@ -234,3 +234,106 @@ async def test_get_public_profile_deleted_user_returns_404(client: AsyncClient):
 
     response = await client.get(f"/api/v1/users/{me['id']}")
     assert response.status_code == 404
+
+
+# --- POST /users/me/avatar ---
+
+
+JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+EXE_BYTES = b"MZ" + b"\x00" * 32
+
+
+@pytest.mark.asyncio
+async def test_upload_avatar_success(client: AsyncClient):
+    token = await register_and_login(client)
+
+    r = await client.post(
+        "/api/v1/users/me/avatar",
+        files={"file": ("avatar.jpg", JPEG_BYTES, "application/octet-stream")},
+        headers=auth(token),
+    )
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["avatar_url"] is not None
+
+
+@pytest.mark.asyncio
+async def test_upload_avatar_replaces_previous(client: AsyncClient):
+    token = await register_and_login(client)
+
+    await client.post(
+        "/api/v1/users/me/avatar",
+        files={"file": ("first.jpg", JPEG_BYTES, "application/octet-stream")},
+        headers=auth(token),
+    )
+    first_url = (await client.get("/api/v1/users/me", headers=auth(token))).json()[
+        "avatar_url"
+    ]
+
+    await client.post(
+        "/api/v1/users/me/avatar",
+        files={"file": ("second.png", PNG_BYTES, "application/octet-stream")},
+        headers=auth(token),
+    )
+    second_url = (await client.get("/api/v1/users/me", headers=auth(token))).json()[
+        "avatar_url"
+    ]
+
+    assert second_url != first_url
+
+
+@pytest.mark.asyncio
+async def test_upload_avatar_disallowed_type(client: AsyncClient):
+    token = await register_and_login(client)
+
+    r = await client.post(
+        "/api/v1/users/me/avatar",
+        files={"file": ("bad.exe", EXE_BYTES, "application/octet-stream")},
+        headers=auth(token),
+    )
+
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_upload_avatar_oversized(client: AsyncClient):
+    token = await register_and_login(client)
+    oversized = JPEG_BYTES + b"\x00" * (2 * 1024 * 1024)
+
+    r = await client.post(
+        "/api/v1/users/me/avatar",
+        files={"file": ("big.jpg", oversized, "application/octet-stream")},
+        headers=auth(token),
+    )
+
+    assert r.status_code == 422
+
+
+# --- DELETE /users/me/avatar ---
+
+
+@pytest.mark.asyncio
+async def test_delete_avatar_clears_url(client: AsyncClient):
+    token = await register_and_login(client)
+
+    await client.post(
+        "/api/v1/users/me/avatar",
+        files={"file": ("avatar.jpg", JPEG_BYTES, "application/octet-stream")},
+        headers=auth(token),
+    )
+
+    r = await client.delete("/api/v1/users/me/avatar", headers=auth(token))
+    assert r.status_code == 204
+
+    me = (await client.get("/api/v1/users/me", headers=auth(token))).json()
+    assert me["avatar_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_delete_avatar_when_none_is_noop(client: AsyncClient):
+    token = await register_and_login(client)
+
+    r = await client.delete("/api/v1/users/me/avatar", headers=auth(token))
+    assert r.status_code == 204
