@@ -1,10 +1,12 @@
 import os
 
 import pytest_asyncio
+import redis.asyncio as aioredis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.cache import get_redis
 from app.database import Base, get_db
 from app.main import app
 
@@ -12,6 +14,24 @@ TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://localhost:5432/taskapi_test_db",
 )
+
+TEST_REDIS_URL = os.getenv(
+    "TEST_REDIS_URL",
+    "redis://localhost:6379/1",  # db 1 isolates test data from dev (db 0)
+)
+
+
+@pytest_asyncio.fixture(scope="session")
+async def redis_client():
+    client = aioredis.Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    yield client
+    await client.aclose()
+
+
+@pytest_asyncio.fixture
+async def redis_session(redis_client):
+    yield redis_client
+    await redis_client.flushdb()
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -48,11 +68,15 @@ async def db_session(engine):
 
 
 @pytest_asyncio.fixture
-async def client(db_session: AsyncSession):
+async def client(db_session: AsyncSession, redis_session):
     async def override_get_db():
         yield db_session
 
+    async def override_get_redis():
+        yield redis_session
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_redis] = override_get_redis
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

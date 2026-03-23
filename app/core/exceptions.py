@@ -39,3 +39,9 @@ class ConflictError(AppException, status_code=409, code="CONFLICT"):
 
 class ValidationError(AppException, status_code=422, code="VALIDATION_ERROR"):
     pass
+
+
+class RateLimitError(AppException, status_code=429, code="RATE_LIMIT_EXCEEDED"):
+    def __init__(self, message: str, retry_after: int = 60):
+        super().__init__(message)
+        self.retry_after = retry_after

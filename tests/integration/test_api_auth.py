@@ -648,3 +648,44 @@ async def test_set_password_short_password_returns_422(client: AsyncClient):
         headers={"Authorization": f"Bearer {tokens['access_token']}"},
     )
     assert response.status_code == 422
+
+
+# --- Rate Limiting ---
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limit_blocks_excess_requests(client: AsyncClient):
+    data = {"email": "ratelimit@example.com", "password": "wrongpassword"}
+    for _ in range(5):
+        await client.post("/api/v1/auth/login", json=data)
+
+    response = await client.post("/api/v1/auth/login", json=data)
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limit_includes_retry_after_header(client: AsyncClient):
+    data = {"email": "ratelimit@example.com", "password": "wrongpassword"}
+    for _ in range(5):
+        await client.post("/api/v1/auth/login", json=data)
+
+    response = await client.post("/api/v1/auth/login", json=data)
+    assert response.status_code == 429
+    assert "retry-after" in response.headers
+    assert int(response.headers["retry-after"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_rate_limit_blocks_excess_requests(
+    client: AsyncClient,
+):
+    tokens = await register_user(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    for _ in range(3):
+        await client.post("/api/v1/auth/resend-verification", headers=headers)
+
+    response = await client.post("/api/v1/auth/resend-verification", headers=headers)
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"

@@ -19,7 +19,7 @@ from app.api.v1.tasks import project_tasks_router, tasks_router
 from app.api.v1.users import router as users_router
 from app.config import settings
 from app.core.cache import close_redis, init_redis
-from app.core.exceptions import AppException
+from app.core.exceptions import AppException, RateLimitError
 from app.core.logging import setup_logging
 
 setup_logging()
@@ -85,6 +85,17 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
     max_age=600,
 )
+
+
+@app.exception_handler(RateLimitError)
+async def rate_limit_exception_handler(
+    _request: Request, exc: RateLimitError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"error": {"code": exc.code, "message": exc.detail}},
+        headers={"Retry-After": str(exc.retry_after)},
+    )
 
 
 @app.exception_handler(AppException)

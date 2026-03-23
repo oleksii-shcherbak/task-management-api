@@ -15,6 +15,7 @@ from app.core.exceptions import (
     UnauthorizedError,
     ValidationError,
 )
+from app.core.rate_limit import RateLimiter
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
@@ -79,7 +80,11 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     return response
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(RateLimiter(limit=5, window=60))],
+)
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(User).where(User.email == data.email, User.deleted_at.is_(None))
@@ -160,7 +165,10 @@ async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
     return {"message": "Email verified successfully"}
 
 
-@router.post("/resend-verification")
+@router.post(
+    "/resend-verification",
+    dependencies=[Depends(RateLimiter(limit=3, window=3600))],
+)
 async def resend_verification(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
