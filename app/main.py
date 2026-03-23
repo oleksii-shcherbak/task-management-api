@@ -1,5 +1,6 @@
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
@@ -17,16 +18,26 @@ from app.api.v1.projects import router as projects_router
 from app.api.v1.tasks import project_tasks_router, tasks_router
 from app.api.v1.users import router as users_router
 from app.config import settings
+from app.core.cache import close_redis, init_redis
 from app.core.exceptions import AppException
 from app.core.logging import setup_logging
+
+setup_logging()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await init_redis(settings.REDIS_URL)
+    yield
+    await close_redis()
+
 
 app = FastAPI(
     title=settings.APP_NAME,
     description="Task Management API",
     version=settings.APP_VERSION,
+    lifespan=lifespan,
 )
-
-setup_logging()
 
 logger = structlog.get_logger()
 
