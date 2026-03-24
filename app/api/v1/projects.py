@@ -1,10 +1,18 @@
+import json
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, status
+from redis.asyncio import Redis
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_member_or_403, get_project_or_404
+from app.api.deps import (
+    get_current_user,
+    get_member_or_403_cached,
+    get_project_or_404,
+    invalidate_membership_cache,
+)
+from app.core.cache import get_redis
 from app.core.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -88,16 +96,52 @@ async def list_project_statuses(
     project_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> list[TaskStatus]:
     await get_project_or_404(project_id, db)
-    await get_member_or_403(project_id, current_user.id, db)
+    await get_member_or_403_cached(project_id, current_user.id, db, redis)
+
+    key = f"statuses:{project_id}"
+    cached = await redis.get(key)
+    if cached is not None:
+        statuses = []
+        for s in json.loads(cached):
+            status_obj = TaskStatus()
+            status_obj.id = s["id"]
+            status_obj.project_id = s["project_id"]
+            status_obj.name = s["name"]
+            status_obj.color = s["color"]
+            status_obj.position = s["position"]
+            status_obj.type = StatusType(s["type"])
+            status_obj.is_default = s["is_default"]
+            statuses.append(status_obj)
+        return statuses
 
     result = await db.execute(
         select(TaskStatus)
         .where(TaskStatus.project_id == project_id)
         .order_by(TaskStatus.position.asc())
     )
-    return list(result.scalars().all())
+    statuses = list(result.scalars().all())
+    await redis.set(
+        key,
+        json.dumps(
+            [
+                {
+                    "id": s.id,
+                    "project_id": s.project_id,
+                    "name": s.name,
+                    "color": s.color,
+                    "position": s.position,
+                    "type": s.type.value,
+                    "is_default": s.is_default,
+                }
+                for s in statuses
+            ]
+        ),
+        ex=600,  # cache for 10 minutes
+    )
+    return statuses
 
 
 @router.get("", response_model=CursorPage[ProjectResponse])
@@ -153,9 +197,10 @@ async def get_project(
     project_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> Project:
     project = await get_project_or_404(project_id, db)
-    await get_member_or_403(project_id, current_user.id, db)
+    await get_member_or_403_cached(project_id, current_user.id, db, redis)
     return project
 
 
@@ -165,10 +210,11 @@ async def update_project(
     body: ProjectUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> Project:
     project = await get_project_or_404(project_id, db)
 
-    member = await get_member_or_403(project_id, current_user.id, db)
+    member = await get_member_or_403_cached(project_id, current_user.id, db, redis)
     if member.role not in (ProjectRole.OWNER, ProjectRole.MANAGER):
         raise ForbiddenError("Only project owners and managers can update the project")
 
@@ -188,10 +234,11 @@ async def delete_project(
     project_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     project = await get_project_or_404(project_id, db)
 
-    member = await get_member_or_403(project_id, current_user.id, db)
+    member = await get_member_or_403_cached(project_id, current_user.id, db, redis)
     if member.role != ProjectRole.OWNER:
         raise ForbiddenError("Only the project owner can delete the project")
 
@@ -209,10 +256,11 @@ async def add_member(
     body: MemberAddRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> ProjectMember:
     await get_project_or_404(project_id, db)
 
-    member = await get_member_or_403(project_id, current_user.id, db)
+    member = await get_member_or_403_cached(project_id, current_user.id, db, redis)
     if member.role not in (ProjectRole.OWNER, ProjectRole.MANAGER):
         raise ForbiddenError("Only owners and managers can add members")
 
@@ -249,9 +297,10 @@ async def list_members(
     project_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> list[ProjectMember]:
     await get_project_or_404(project_id, db)
-    await get_member_or_403(project_id, current_user.id, db)
+    await get_member_or_403_cached(project_id, current_user.id, db, redis)
 
     result = await db.execute(
         select(ProjectMember).where(ProjectMember.project_id == project_id)
@@ -267,10 +316,11 @@ async def remove_member(
     user_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     await get_project_or_404(project_id, db)
 
-    member = await get_member_or_403(project_id, current_user.id, db)
+    member = await get_member_or_403_cached(project_id, current_user.id, db, redis)
     if member.role not in (ProjectRole.OWNER, ProjectRole.MANAGER):
         raise ForbiddenError("Only owners and managers can remove members")
 
@@ -288,6 +338,7 @@ async def remove_member(
 
     await db.delete(target)
     await db.commit()
+    await invalidate_membership_cache(project_id, user_id, redis)
 
 
 @router.patch("/{project_id}/members/{user_id}/role", response_model=MemberResponse)
@@ -297,10 +348,11 @@ async def update_member_role(
     body: MemberRoleUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> ProjectMember:
     await get_project_or_404(project_id, db)
 
-    member = await get_member_or_403(project_id, current_user.id, db)
+    member = await get_member_or_403_cached(project_id, current_user.id, db, redis)
     if member.role != ProjectRole.OWNER:
         raise ForbiddenError("Only the project owner can change member roles")
 
@@ -322,4 +374,5 @@ async def update_member_role(
     target.role = body.role
     await db.commit()
     await db.refresh(target)
+    await invalidate_membership_cache(project_id, user_id, redis)
     return target

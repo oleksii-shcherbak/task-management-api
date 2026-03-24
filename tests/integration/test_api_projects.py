@@ -357,3 +357,62 @@ async def test_list_projects_invalid_cursor_returns_422(client: AsyncClient):
         headers=await auth_headers(token),
     )
     assert response.status_code == 422
+
+
+# --- Caching ---
+
+
+@pytest.mark.asyncio
+async def test_remove_member_invalidates_membership_cache(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    bob_id = (
+        await client.get("/api/v1/users/me", headers=await auth_headers(bob_token))
+    ).json()["id"]
+
+    project = await create_project(client, alice_token)
+    project_id = project["id"]
+
+    await client.post(
+        f"/api/v1/projects/{project_id}/members",
+        json={"user_id": bob_id, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+
+    # Bob accesses the project - his membership is now cached
+    response = await client.get(
+        f"/api/v1/projects/{project_id}",
+        headers=await auth_headers(bob_token),
+    )
+    assert response.status_code == 200
+
+    # Alice removes Bob
+    await client.delete(
+        f"/api/v1/projects/{project_id}/members/{bob_id}",
+        headers=await auth_headers(alice_token),
+    )
+
+    # Bob's next request must be rejected - stale cache would incorrectly allow it
+    response = await client.get(
+        f"/api/v1/projects/{project_id}",
+        headers=await auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_project_statuses_cache_returns_correct_data(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    project_id = project["id"]
+    headers = await auth_headers(token)
+
+    first = await client.get(f"/api/v1/projects/{project_id}/statuses", headers=headers)
+    assert first.status_code == 200
+
+    # Second call hits the cache - data must be identical
+    second = await client.get(
+        f"/api/v1/projects/{project_id}/statuses", headers=headers
+    )
+    assert second.status_code == 200
+    assert second.json() == first.json()

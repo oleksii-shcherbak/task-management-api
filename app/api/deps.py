@@ -1,8 +1,10 @@
+import json
 from datetime import UTC, datetime
 
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,8 +12,10 @@ from app.core.exceptions import ForbiddenError, NotFoundError
 from app.core.security import decode_access_token
 from app.database import get_db
 from app.models.project import Project
-from app.models.project_member import ProjectMember
+from app.models.project_member import ProjectMember, ProjectRole
 from app.models.user import User
+
+_MEMBERSHIP_CACHE_TTL = 300  # 5 minutes
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -84,3 +88,37 @@ async def get_member_or_403(
     if member is None:
         raise ForbiddenError("You are not a member of this project")
     return member
+
+
+async def get_member_or_403_cached(
+    project_id: int, user_id: int, db: AsyncSession, redis: Redis
+) -> ProjectMember:
+    """Check project membership, using Redis as a read-through cache.
+
+    Only the role is stored - callers never need joined_at or other fields.
+    On cache miss the result is written back so subsequent calls skip the DB.
+    """
+    key = f"membership:{project_id}:{user_id}"
+    cached = await redis.get(key)
+    if cached is not None:
+        member = ProjectMember()
+        member.project_id = project_id
+        member.user_id = user_id
+        member.role = ProjectRole(json.loads(cached)["role"])
+        return member
+
+    member = await get_member_or_403(project_id, user_id, db)
+    await redis.set(
+        key, json.dumps({"role": member.role.value}), ex=_MEMBERSHIP_CACHE_TTL
+    )
+    return member
+
+
+async def invalidate_membership_cache(
+    project_id: int, user_id: int, redis: Redis
+) -> None:
+    await redis.delete(f"membership:{project_id}:{user_id}")
+
+
+async def invalidate_status_cache(project_id: int, redis: Redis) -> None:
+    await redis.delete(f"statuses:{project_id}")
