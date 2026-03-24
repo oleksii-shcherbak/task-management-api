@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str
 
+    # Email (SMTP)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    FROM_EMAIL: str = "noreply@taskapi.dev"
+
+    # Base URL used to build links inside emails (verification, password reset)
+    FRONTEND_URL: str = "http://localhost:8000"
+
     # Storage settings
     STORAGE_BACKEND: str = "local"  # "local" or "s3"
     UPLOAD_DIR: str = "uploads"
