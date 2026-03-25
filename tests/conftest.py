@@ -1,11 +1,14 @@
 import os
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 import pytest_asyncio
 import redis.asyncio as aioredis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.arq_pool import get_arq_pool
 from app.core.cache import get_redis
 from app.database import Base, get_db
 from app.main import app
@@ -67,8 +70,15 @@ async def db_session(engine):
         )
 
 
+@pytest.fixture
+def arq_mock():
+    mock = MagicMock()
+    mock.enqueue_job = AsyncMock()
+    return mock
+
+
 @pytest_asyncio.fixture
-async def client(db_session: AsyncSession, redis_session):
+async def client(db_session: AsyncSession, redis_session, arq_mock):
     async def override_get_db():
         yield db_session
 
@@ -77,6 +87,7 @@ async def client(db_session: AsyncSession, redis_session):
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_redis] = override_get_redis
+    app.dependency_overrides[get_arq_pool] = lambda: arq_mock
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

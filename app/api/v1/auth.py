@@ -1,7 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
-import structlog
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select, update
@@ -9,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.config import settings
+from app.core.arq_pool import get_arq_pool
 from app.core.exceptions import (
     ConflictError,
     NotFoundError,
@@ -39,8 +39,6 @@ from app.services.github import exchange_code_for_token, fetch_github_profile
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-logger = structlog.get_logger()
-
 
 def _prepare_token_response(user_id: int, db: AsyncSession) -> TokenResponse:
     """Stage a fresh access + refresh token pair on the session (caller must commit)."""
@@ -58,7 +56,11 @@ def _prepare_token_response(user_id: int, db: AsyncSession) -> TokenResponse:
 
 
 @router.post("/register", response_model=TokenResponse, status_code=201)
-async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(
+    data: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+    arq_pool=Depends(get_arq_pool),
+):
     result = await db.execute(
         select(User).where(User.email == data.email, User.deleted_at.is_(None))
     )
@@ -73,10 +75,25 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         password_changed_at=datetime.now(UTC),
     )
     db.add(user)
-    await db.flush()  # populate user.id before staging the refresh token
+    await db.flush()
 
     response = _prepare_token_response(user.id, db)
+
+    plain_verification_token = generate_refresh_token()
+    db.add(
+        EmailVerificationToken(
+            token_hash=hash_token(plain_verification_token),
+            user_id=user.id,
+            expires_at=datetime.now(UTC) + timedelta(hours=24),
+        )
+    )
+
     await db.commit()
+    await arq_pool.enqueue_job(
+        "send_verification_email",
+        user_id=user.id,
+        token=plain_verification_token,
+    )
     return response
 
 
@@ -172,6 +189,7 @@ async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
 async def resend_verification(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    arq_pool=Depends(get_arq_pool),
 ):
     if current_user.is_verified:
         raise ConflictError("Email is already verified")
@@ -195,10 +213,11 @@ async def resend_verification(
         )
     )
     await db.commit()
-
-    # TODO: send verification email via background task queue
-    logger.info("verification_email_queued", user_id=current_user.id, token=plain_token)
-
+    await arq_pool.enqueue_job(
+        "send_verification_email",
+        user_id=current_user.id,
+        token=plain_token,
+    )
     return {"message": "Verification email sent"}
 
 

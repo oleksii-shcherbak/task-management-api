@@ -1,5 +1,5 @@
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -104,6 +104,17 @@ async def test_register_missing_fields_returns_422(client: AsyncClient):
         json={"email": "test@example.com"},
     )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_register_enqueues_verification_email(client: AsyncClient, arq_mock):
+    await client.post("/api/v1/auth/register", json=VALID_USER)
+
+    arq_mock.enqueue_job.assert_called_once_with(
+        "send_verification_email",
+        user_id=ANY,
+        token=ANY,
+    )
 
 
 # --- Login ---
@@ -390,6 +401,23 @@ async def test_resend_verification_already_verified_returns_409(
 async def test_resend_verification_requires_auth(client: AsyncClient):
     response = await client.post("/api/v1/auth/resend-verification")
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_enqueues_email(client: AsyncClient, arq_mock):
+    tokens = await register_user(client)
+    arq_mock.enqueue_job.reset_mock()
+
+    await client.post(
+        "/api/v1/auth/resend-verification",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+
+    arq_mock.enqueue_job.assert_called_once_with(
+        "send_verification_email",
+        user_id=ANY,
+        token=ANY,
+    )
 
 
 # --- GitHub OAuth ---
