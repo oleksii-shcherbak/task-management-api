@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from app.models.comment import Comment
     from app.models.email_verification_token import EmailVerificationToken
     from app.models.oauth_account import OAuthAccount
+    from app.models.password_reset_token import PasswordResetToken
     from app.models.project import Project
     from app.models.project_member import ProjectMember
     from app.models.refresh_token import RefreshToken
@@ -115,6 +116,10 @@ class User(Base):
 
     email_verification_tokens: Mapped[list[EmailVerificationToken]] = relationship(
         "EmailVerificationToken", back_populates="user", cascade="all, delete-orphan"
+    )
+
+    password_reset_tokens: Mapped[list[PasswordResetToken]] = relationship(
+        "PasswordResetToken", back_populates="user", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:

@@ -24,3 +24,12 @@ class TokenResponse(BaseModel):
 
 class SetPasswordRequest(BaseModel):
     password: str = Field(min_length=8)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str = Field(min_length=8)

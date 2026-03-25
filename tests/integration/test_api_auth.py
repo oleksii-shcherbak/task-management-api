@@ -717,3 +717,124 @@ async def test_resend_verification_rate_limit_blocks_excess_requests(
     response = await client.post("/api/v1/auth/resend-verification", headers=headers)
     assert response.status_code == 429
     assert response.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+
+
+# --- Password Reset ---
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_enqueues_reset_email(client: AsyncClient, arq_mock):
+    await register_user(client)
+    arq_mock.enqueue_job.reset_mock()
+
+    response = await client.post(
+        "/api/v1/auth/forgot-password",
+        json={"email": VALID_USER["email"]},
+    )
+
+    assert response.status_code == 200
+    arq_mock.enqueue_job.assert_called_once_with(
+        "send_password_reset_email",
+        user_id=ANY,
+        token=ANY,
+    )
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_unknown_email_returns_200_without_enqueueing(
+    client: AsyncClient, arq_mock
+):
+    response = await client.post(
+        "/api/v1/auth/forgot-password",
+        json={"email": "nobody@example.com"},
+    )
+
+    assert response.status_code == 200
+    arq_mock.enqueue_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_password_success(client: AsyncClient, arq_mock):
+    await register_user(client)
+    await client.post(
+        "/api/v1/auth/forgot-password", json={"email": VALID_USER["email"]}
+    )
+    token = arq_mock.enqueue_job.call_args.kwargs["token"]
+
+    response = await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "password": "newpassword123"},
+    )
+
+    assert response.status_code == 204
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": VALID_USER["email"], "password": "newpassword123"},
+    )
+    assert login.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_reset_password_old_password_rejected_after_reset(
+    client: AsyncClient, arq_mock
+):
+    await register_user(client)
+    await client.post(
+        "/api/v1/auth/forgot-password", json={"email": VALID_USER["email"]}
+    )
+    token = arq_mock.enqueue_job.call_args.kwargs["token"]
+    await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "password": "newpassword123"},
+    )
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": VALID_USER["email"], "password": VALID_USER["password"]},
+    )
+    assert login.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_reset_password_invalid_token_returns_404(client: AsyncClient):
+    response = await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": "bogustoken", "password": "newpassword123"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reset_password_token_cannot_be_reused(client: AsyncClient, arq_mock):
+    await register_user(client)
+    await client.post(
+        "/api/v1/auth/forgot-password", json={"email": VALID_USER["email"]}
+    )
+    token = arq_mock.enqueue_job.call_args.kwargs["token"]
+
+    await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "password": "newpassword123"},
+    )
+    response = await client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "password": "anotherpassword123"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_rate_limit_blocks_excess_requests(client: AsyncClient):
+    await register_user(client)
+
+    for _ in range(3):
+        await client.post(
+            "/api/v1/auth/forgot-password", json={"email": VALID_USER["email"]}
+        )
+
+    response = await client.post(
+        "/api/v1/auth/forgot-password", json={"email": VALID_USER["email"]}
+    )
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"

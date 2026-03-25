@@ -26,12 +26,15 @@ from app.core.security import (
 from app.database import get_db
 from app.models.email_verification_token import EmailVerificationToken
 from app.models.oauth_account import OAuthAccount, OAuthProvider
+from app.models.password_reset_token import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.auth import (
+    ForgotPasswordRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     SetPasswordRequest,
     TokenResponse,
 )
@@ -304,7 +307,7 @@ async def set_password(
 ):
     if current_user.password_hash is not None:
         raise ConflictError(
-            "Account already has a password — use change-password instead"
+            "Account already has a password - use change-password instead"
         )
 
     current_user.password_hash = hash_password(data.password)
@@ -314,6 +317,91 @@ async def set_password(
         update(RefreshToken)
         .where(
             RefreshToken.user_id == current_user.id, RefreshToken.is_revoked.is_(False)
+        )
+        .values(is_revoked=True)
+    )
+    await db.commit()
+
+
+@router.post(
+    "/forgot-password",
+    dependencies=[Depends(RateLimiter(limit=3, window=3600))],
+)
+async def forgot_password(
+    data: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    arq_pool=Depends(get_arq_pool),
+):
+    result = await db.execute(
+        select(User).where(User.email == data.email, User.deleted_at.is_(None))
+    )
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        # Don't reveal whether the email exists to prevent user enumeration attacks
+        return {
+            "message": "If an account with that email exists, a reset link has been sent."
+        }
+
+    # Consume any outstanding unused tokens so only one is valid at a time
+    await db.execute(
+        update(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        )
+        .values(used_at=datetime.now(UTC))
+    )
+
+    plain_token = generate_refresh_token()
+    db.add(
+        PasswordResetToken(
+            token_hash=hash_token(plain_token),
+            user_id=user.id,
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    await db.commit()
+    await arq_pool.enqueue_job(
+        "send_password_reset_email",
+        user_id=user.id,
+        token=plain_token,
+    )
+    return {
+        "message": "If an account with that email exists, a reset link has been sent."
+    }
+
+
+@router.post("/reset-password", status_code=204)
+async def reset_password(
+    data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)
+):
+    token_hash = hash_token(data.token)
+
+    result = await db.execute(
+        select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
+    )
+    record = result.scalar_one_or_none()
+
+    if (
+        not record
+        or record.used_at is not None
+        or record.expires_at < datetime.now(UTC)
+    ):
+        raise NotFoundError("Invalid or expired reset token")
+
+    record.used_at = datetime.now(UTC)
+
+    result = await db.execute(select(User).where(User.id == record.user_id))
+    user = result.scalar_one_or_none()
+    if user:
+        user.password_hash = hash_password(data.password)
+        user.password_changed_at = datetime.now(UTC)
+
+    await db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == record.user_id, RefreshToken.is_revoked.is_(False)
         )
         .values(is_revoked=True)
     )

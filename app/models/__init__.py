@@ -3,6 +3,7 @@ from app.models.attachment import Attachment
 from app.models.comment import Comment
 from app.models.email_verification_token import EmailVerificationToken
 from app.models.oauth_account import OAuthAccount, OAuthProvider
+from app.models.password_reset_token import PasswordResetToken
 from app.models.project import Project, ProjectStatus
 from app.models.project_member import ProjectMember, ProjectRole
 from app.models.refresh_token import RefreshToken
@@ -18,6 +19,7 @@ __all__ = [
     "EmailVerificationToken",
     "OAuthAccount",
     "OAuthProvider",
+    "PasswordResetToken",
     "Project",
     "ProjectMember",
     "ProjectRole",
