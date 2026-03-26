@@ -25,6 +25,21 @@ def password_reset_email(name: str, token: str) -> str:
 </html>"""
 
 
+def due_date_reminder_email(
+    name: str, task_title: str, project_name: str, due_date: str
+) -> str:
+    return f"""\
+<html>
+  <body style="font-family: sans-serif; color: #222;">
+    <p>Hi {name},</p>
+    <p>
+      This is a reminder that the task <strong>{task_title}</strong>
+      in project <strong>{project_name}</strong> is due on <strong>{due_date}</strong>.
+    </p>
+  </body>
+</html>"""
+
+
 def project_invitation_email(name: str, project_name: str, role: str) -> str:
     return f"""\
 <html>

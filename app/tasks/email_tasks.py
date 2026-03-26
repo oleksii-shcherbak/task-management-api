@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.models.user import User
 from app.tasks.email_templates import (
     assignment_notification_email,
+    due_date_reminder_email,
     password_reset_email,
     project_invitation_email,
     status_change_notification_email,
@@ -65,6 +66,29 @@ async def send_password_reset_email(ctx: dict, *, user_id: int, token: str) -> N
     html = password_reset_email(user.name, token)
     await _send_smtp(ctx, to=user.email, subject="Reset your password", html=html)
     logger.info("password_reset_email_sent", user_id=user_id)
+
+
+async def send_due_date_reminder(
+    ctx: dict,
+    *,
+    user_id: int,
+    task_id: int,
+    task_title: str,
+    project_name: str,
+    due_date: str,
+) -> None:
+    async with ctx["db_factory"]() as db:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+
+    if user is None:
+        return
+
+    html = due_date_reminder_email(user.name, task_title, project_name, due_date)
+    await _send_smtp(
+        ctx, to=user.email, subject=f"Reminder: {task_title} is due soon", html=html
+    )
+    logger.info("due_date_reminder_sent", user_id=user_id, task_id=task_id)
 
 
 async def send_project_invitation(
