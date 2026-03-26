@@ -17,7 +17,7 @@ dependencies = [
     "filetype>=1.2.0",
     "boto3>=1.42.71",
     "python-multipart>=0.0.22",
-    "redis[asyncio]>=7.3.0",
+    "redis>=7.3.0",
     "arq>=0.25.0",
     "aiosmtplib>=5.1.0",
 ]
@@ -96,6 +96,11 @@ line-ending = "auto"
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]  # Your package name
+
+[tool.uv]
+constraint-dependencies = [
+    "requests>=2.33.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

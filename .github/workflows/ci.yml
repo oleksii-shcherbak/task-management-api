@@ -67,4 +67,6 @@ jobs:
         with:
           enable-caching: true
       - run: uv sync --frozen --all-groups
-      - run: uv run pip-audit
+      # CVE-2026-4539 affects pygments 2.19.2 with no fix released yet.
+      # --ignore-vuln suppresses it until a patched version is available.
+      - run: uv run pip-audit --ignore-vuln CVE-2026-4539
