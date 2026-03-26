@@ -6,9 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, get_member_or_403, get_project_or_404
+from app.core.arq_pool import get_arq_pool
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.database import get_db
 from app.models.activity_log import ActivityLog
+from app.models.project import Project
 from app.models.project_member import ProjectMember, ProjectRole
 from app.models.task import Task, TaskPriority
 from app.models.task_assignee import TaskAssignee
@@ -68,8 +70,9 @@ async def create_task(
     body: TaskCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    arq_pool=Depends(get_arq_pool),
 ) -> Task:
-    await get_project_or_404(project_id, db)
+    project = await get_project_or_404(project_id, db)
 
     member = await get_member_or_403(project_id, current_user.id, db)
     if member.role not in (ProjectRole.OWNER, ProjectRole.MANAGER):
@@ -144,6 +147,17 @@ async def create_task(
     )
 
     await db.commit()
+
+    for uid in body.assignee_ids:
+        if uid != current_user.id:
+            await arq_pool.enqueue_job(
+                "send_assignment_notification",
+                user_id=uid,
+                task_id=task.id,
+                task_title=task.title,
+                project_name=project.name,
+            )
+
     return await get_task_or_404(task.id, db)
 
 
@@ -252,6 +266,38 @@ async def get_task_activity(
     return list(result.scalars().all())
 
 
+async def _enqueue_update_notifications(
+    arq_pool,
+    *,
+    task_id: int,
+    task_title: str,
+    project_name: str,
+    newly_added_ids: set[int],
+    status_notify_ids: set[int],
+    new_status: TaskStatus | None,
+    old_status_name: str,
+) -> None:
+    if status_notify_ids and new_status is not None:
+        for uid in status_notify_ids:
+            await arq_pool.enqueue_job(
+                "send_status_change_notification",
+                user_id=uid,
+                task_id=task_id,
+                task_title=task_title,
+                project_name=project_name,
+                old_status=old_status_name,
+                new_status=new_status.name,
+            )
+    for uid in newly_added_ids:
+        await arq_pool.enqueue_job(
+            "send_assignment_notification",
+            user_id=uid,
+            task_id=task_id,
+            task_title=task_title,
+            project_name=project_name,
+        )
+
+
 # --- Update task ---
 
 
@@ -261,6 +307,7 @@ async def update_task(
     body: TaskUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    arq_pool=Depends(get_arq_pool),
 ) -> Task:
     task = await get_task_or_404(task_id, db)
     member = await get_member_or_403(task.project_id, current_user.id, db)
@@ -306,6 +353,9 @@ async def update_task(
                 task.project_id, update_data["status_id"], db
             )
 
+    old_assignee_ids = {ta.user_id for ta in task.task_assignees}
+    old_status_name = task.status.name
+
     if update_data.get("assignee_ids"):
         result = await db.execute(
             select(ProjectMember.user_id).where(
@@ -320,10 +370,39 @@ async def update_task(
                 "One or more assignees are not members of this project"
             )
 
+    newly_added_ids = (
+        set(update_data.get("assignee_ids") or [])
+        - old_assignee_ids
+        - {current_user.id}
+    )
+    status_notify_ids = (
+        old_assignee_ids - {current_user.id} if new_status is not None else set()
+    )
+
+    project_name: str | None = None
+    if newly_added_ids or status_notify_ids:
+        result = await db.execute(
+            select(Project.name).where(Project.id == task.project_id)
+        )
+        project_name = result.scalar_one()
+
     await task_service.update_task(db, task, body, current_user, new_status)
 
     await db.commit()
     db.expunge(task)
+
+    if project_name is not None:
+        await _enqueue_update_notifications(
+            arq_pool,
+            task_id=task.id,
+            task_title=task.title,
+            project_name=project_name,
+            newly_added_ids=newly_added_ids,
+            status_notify_ids=status_notify_ids,
+            new_status=new_status,
+            old_status_name=old_status_name,
+        )
+
     return await get_task_or_404(task.id, db)
 
 

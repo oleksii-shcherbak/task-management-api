@@ -12,6 +12,7 @@ from app.api.deps import (
     get_project_or_404,
     invalidate_membership_cache,
 )
+from app.core.arq_pool import get_arq_pool
 from app.core.cache import get_redis
 from app.core.exceptions import (
     ConflictError,
@@ -257,8 +258,9 @@ async def add_member(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
+    arq_pool=Depends(get_arq_pool),
 ) -> ProjectMember:
-    await get_project_or_404(project_id, db)
+    project = await get_project_or_404(project_id, db)
 
     member = await get_member_or_403_cached(project_id, current_user.id, db, redis)
     if member.role not in (ProjectRole.OWNER, ProjectRole.MANAGER):
@@ -289,6 +291,13 @@ async def add_member(
     db.add(new_member)
     await db.commit()
     await db.refresh(new_member)
+
+    await arq_pool.enqueue_job(
+        "send_project_invitation",
+        user_id=body.user_id,
+        project_name=project.name,
+        role=body.role.value,
+    )
     return new_member
 
 

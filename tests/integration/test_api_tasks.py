@@ -929,3 +929,76 @@ async def test_list_tasks_invalid_cursor_returns_422(client: AsyncClient):
         headers=auth_headers(token),
     )
     assert response.status_code == 422
+
+
+# --- Notification enqueueing ---
+
+
+@pytest.mark.asyncio
+async def test_create_task_enqueues_assignment_notification_for_other_assignees(
+    client: AsyncClient, arq_mock
+):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    bob_id = (
+        await client.get("/api/v1/users/me", headers=auth_headers(bob_token))
+    ).json()["id"]
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": bob_id, "role": "member"},
+        headers=auth_headers(alice_token),
+    )
+    arq_mock.enqueue_job.reset_mock()
+
+    await create_task(client, alice_token, project["id"], assignee_ids=[bob_id])
+
+    calls = [c.args[0] for c in arq_mock.enqueue_job.call_args_list]
+    assert "send_assignment_notification" in calls
+
+
+@pytest.mark.asyncio
+async def test_create_task_does_not_notify_self_assignment(
+    client: AsyncClient, arq_mock
+):
+    alice_token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, alice_token)
+    alice_id = (
+        await client.get("/api/v1/users/me", headers=auth_headers(alice_token))
+    ).json()["id"]
+    arq_mock.enqueue_job.reset_mock()
+
+    await create_task(client, alice_token, project["id"], assignee_ids=[alice_id])
+
+    calls = [c.args[0] for c in arq_mock.enqueue_job.call_args_list]
+    assert "send_assignment_notification" not in calls
+
+
+@pytest.mark.asyncio
+async def test_update_task_status_enqueues_notification_for_assignees(
+    client: AsyncClient, arq_mock
+):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    bob_id = (
+        await client.get("/api/v1/users/me", headers=auth_headers(bob_token))
+    ).json()["id"]
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": bob_id, "role": "member"},
+        headers=auth_headers(alice_token),
+    )
+    statuses = await get_statuses(client, alice_token, project["id"])
+    task = await create_task(client, alice_token, project["id"], assignee_ids=[bob_id])
+    in_progress_id = statuses["In Progress"]["id"]
+    arq_mock.enqueue_job.reset_mock()
+
+    await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"status_id": in_progress_id},
+        headers=auth_headers(alice_token),
+    )
+
+    calls = [c.args[0] for c in arq_mock.enqueue_job.call_args_list]
+    assert "send_status_change_notification" in calls

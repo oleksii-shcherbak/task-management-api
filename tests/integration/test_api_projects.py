@@ -416,3 +416,29 @@ async def test_list_project_statuses_cache_returns_correct_data(client: AsyncCli
     )
     assert second.status_code == 200
     assert second.json() == first.json()
+
+
+# --- Notification enqueueing ---
+
+
+@pytest.mark.asyncio
+async def test_add_member_enqueues_invitation_notification(
+    client: AsyncClient, arq_mock
+):
+    alice_token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    arq_mock.enqueue_job.reset_mock()
+
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": 2, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+
+    arq_mock.enqueue_job.assert_called_once_with(
+        "send_project_invitation",
+        user_id=2,
+        project_name=project["name"],
+        role="member",
+    )
