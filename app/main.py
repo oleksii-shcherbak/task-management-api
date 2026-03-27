@@ -15,6 +15,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.comments import comments_router
 from app.api.v1.comments import project_tasks_router as comments_project_router
 from app.api.v1.projects import router as projects_router
+from app.api.v1.statuses import router as statuses_router
 from app.api.v1.tasks import project_tasks_router, tasks_router
 from app.api.v1.users import router as users_router
 from app.config import settings
@@ -152,6 +153,7 @@ async def unhandled_exception_handler(
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(projects_router, prefix="/api/v1")
+app.include_router(statuses_router, prefix="/api/v1")
 app.include_router(project_tasks_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(comments_project_router, prefix="/api/v1/projects")
