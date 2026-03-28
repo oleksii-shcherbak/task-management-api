@@ -37,10 +37,18 @@ class User(Base):
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Same pattern for username: soft-deleted users free up their username
+        Index(
+            "ix_users_username_active",
+            "username",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str] = mapped_column(String(30), nullable=False)
     # None for OAuth-only users who have no password
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
@@ -42,6 +43,25 @@ from app.services.github import exchange_code_for_token, fetch_github_profile
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+_SLUG_STRIP_RE = re.compile(r"[^a-z0-9_-]")
+
+
+def _slugify_name(name: str) -> str:
+    """Convert a display name to a valid username slug (may still need a uniqueness suffix)."""
+    slug = _SLUG_STRIP_RE.sub("_", name.lower()).strip("_-")
+    return slug[:25] or "user"
+
+
+async def _resolve_username(base: str, user_id: int, db: AsyncSession) -> str:
+    """Return base slug if unclaimed, otherwise base_{user_id} which is always unique."""
+    result = await db.execute(
+        select(User.id).where(User.username == base, User.deleted_at.is_(None))
+    )
+    taken_by = result.scalar_one_or_none()
+    if taken_by is None or taken_by == user_id:
+        return base
+    return f"{base}_{user_id}"
+
 
 def _prepare_token_response(user_id: int, db: AsyncSession) -> TokenResponse:
     """Stage a fresh access + refresh token pair on the session (caller must commit)."""
@@ -70,15 +90,32 @@ async def register(
     if result.scalar_one_or_none():
         raise ConflictError("Email already registered")
 
+    if data.username:
+        taken = await db.execute(
+            select(User.id).where(
+                User.username == data.username, User.deleted_at.is_(None)
+            )
+        )
+        if taken.scalar_one_or_none():
+            raise ConflictError("Username already taken")
+
     user = User(
         email=data.email,
         password_hash=hash_password(data.password),
         name=data.name,
+        # Temporary placeholder - replaced below after flush gives the id
+        username="_",
         is_active=True,
         password_changed_at=datetime.now(UTC),
     )
     db.add(user)
     await db.flush()
+
+    if data.username:
+        user.username = data.username
+    else:
+        base = _slugify_name(data.name)
+        user.username = await _resolve_username(base, user.id, db)
 
     response = _prepare_token_response(user.id, db)
 
@@ -106,13 +143,16 @@ async def register(
     dependencies=[Depends(RateLimiter(limit=5, window=60))],
 )
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(User).where(User.email == data.email, User.deleted_at.is_(None))
-    )
+    if "@" in data.identifier:
+        condition = User.email == data.identifier
+    else:
+        condition = User.username == data.identifier
+
+    result = await db.execute(select(User).where(condition, User.deleted_at.is_(None)))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(data.password, user.password_hash):
-        raise UnauthorizedError("Invalid email or password")
+        raise UnauthorizedError("Invalid credentials")
 
     response = _prepare_token_response(user.id, db)
     await db.commit()
@@ -276,12 +316,15 @@ async def github_oauth_callback(code: str, db: AsyncSession = Depends(get_db)):
         user = User(
             email=email,
             name=name,
+            username="_",
             is_active=True,
             is_verified=True,
             password_changed_at=datetime.now(UTC),
         )
         db.add(user)
         await db.flush()
+        base = _slugify_name(name)
+        user.username = await _resolve_username(base, user.id, db)
     else:
         user.is_verified = True
 

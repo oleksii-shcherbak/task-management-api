@@ -20,7 +20,7 @@ async def register_and_login(client: AsyncClient, user: dict | None = None) -> s
     await client.post("/api/v1/auth/register", json=user)
     response = await client.post(
         "/api/v1/auth/login",
-        json={"email": user["email"], "password": user["password"]},
+        json={"identifier": user["email"], "password": user["password"]},
     )
     return response.json()["access_token"]
 
@@ -114,6 +114,50 @@ async def test_update_me_empty_name_returns_422(client: AsyncClient):
     assert response.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_update_username_success(client: AsyncClient):
+    token = await register_and_login(client)
+    response = await client.patch(
+        "/api/v1/users/me", headers=auth(token), json={"username": "new_handle"}
+    )
+    assert response.status_code == 200
+    assert response.json()["username"] == "new_handle"
+
+
+@pytest.mark.asyncio
+async def test_update_username_duplicate_returns_409(client: AsyncClient):
+    token_alice = await register_and_login(client, USER)
+    await register_and_login(
+        client,
+        {**OTHER_USER, "username": "bobhandle"}
+        if "username" not in OTHER_USER
+        else OTHER_USER,
+    )
+
+    response = await client.patch(
+        "/api/v1/users/me",
+        headers=auth(token_alice),
+        json={"username": "bobhandle"},
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_update_username_reserved_returns_422(client: AsyncClient):
+    token = await register_and_login(client)
+    response = await client.patch(
+        "/api/v1/users/me", headers=auth(token), json={"username": "admin"}
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_get_me_includes_username(client: AsyncClient):
+    token = await register_and_login(client)
+    response = await client.get("/api/v1/users/me", headers=auth(token))
+    assert "username" in response.json()
+
+
 # --- PATCH /users/me/password ---
 
 
@@ -144,7 +188,7 @@ async def test_change_password_revokes_refresh_tokens(client: AsyncClient):
     await client.post("/api/v1/auth/register", json=USER)
     login_resp = await client.post(
         "/api/v1/auth/login",
-        json={"email": USER["email"], "password": USER["password"]},
+        json={"identifier": USER["email"], "password": USER["password"]},
     )
     tokens = login_resp.json()
     access_token = tokens["access_token"]
@@ -190,7 +234,7 @@ async def test_deleted_user_cannot_authenticate(client: AsyncClient):
 
     response = await client.post(
         "/api/v1/auth/login",
-        json={"email": USER["email"], "password": USER["password"]},
+        json={"identifier": USER["email"], "password": USER["password"]},
     )
     assert response.status_code == 401
 

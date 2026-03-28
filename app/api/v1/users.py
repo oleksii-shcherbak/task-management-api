@@ -51,6 +51,15 @@ async def update_me(
             raise ConflictError("Email already taken")
         current_user.is_verified = False
 
+    if "username" in updates and updates["username"] != current_user.username:
+        result = await db.execute(
+            select(User.id).where(
+                User.username == updates["username"], User.deleted_at.is_(None)
+            )
+        )
+        if result.scalar_one_or_none():
+            raise ConflictError("Username already taken")
+
     for key, value in updates.items():
         setattr(current_user, key, value)
 
