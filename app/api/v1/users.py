@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import filetype
@@ -19,12 +19,15 @@ from app.core.storage import StorageService, get_storage_service
 from app.database import get_db
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
+from app.models.username_history import UsernameHistory
 from app.schemas.user import (
     PasswordChange,
     PublicUserResponse,
     UserResponse,
     UserUpdate,
 )
+
+USERNAME_COOLDOWN_DAYS = 30
 
 MAX_AVATAR_BYTES = 2 * 1024 * 1024  # 2 MB
 ALLOWED_AVATAR_MIME_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -52,13 +55,53 @@ async def update_me(
         current_user.is_verified = False
 
     if "username" in updates and updates["username"] != current_user.username:
-        result = await db.execute(
+        new_username = updates["username"]
+
+        # Enforce one change per 30 days
+        recent = await db.execute(
+            select(UsernameHistory)
+            .where(UsernameHistory.user_id == current_user.id)
+            .order_by(UsernameHistory.changed_at.desc())
+            .limit(1)
+        )
+        last_change = recent.scalar_one_or_none()
+        if last_change is not None:
+            next_allowed = last_change.changed_at + timedelta(
+                days=USERNAME_COOLDOWN_DAYS
+            )
+            if datetime.now(UTC) < next_allowed:
+                raise ValidationError(
+                    f"Username can only be changed once every {USERNAME_COOLDOWN_DAYS} days. "
+                    f"Next change allowed after {next_allowed.date().isoformat()}"
+                )
+
+        # Check active users
+        taken_by_active = await db.execute(
             select(User.id).where(
-                User.username == updates["username"], User.deleted_at.is_(None)
+                User.username == new_username, User.deleted_at.is_(None)
             )
         )
-        if result.scalar_one_or_none():
+        if taken_by_active.scalar_one_or_none():
             raise ConflictError("Username already taken")
+
+        # Check username_history grace period (released_at > now means still reserved)
+        reserved = await db.execute(
+            select(UsernameHistory.id).where(
+                UsernameHistory.old_username == new_username,
+                UsernameHistory.released_at > datetime.now(UTC),
+            )
+        )
+        if reserved.scalar_one_or_none():
+            raise ConflictError("Username is temporarily reserved")
+
+        db.add(
+            UsernameHistory(
+                user_id=current_user.id,
+                old_username=current_user.username,
+                changed_at=datetime.now(UTC),
+                released_at=datetime.now(UTC) + timedelta(days=USERNAME_COOLDOWN_DAYS),
+            )
+        )
 
     for key, value in updates.items():
         setattr(current_user, key, value)

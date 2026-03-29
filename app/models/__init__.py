@@ -11,6 +11,7 @@ from app.models.task import Task, TaskPriority
 from app.models.task_assignee import TaskAssignee
 from app.models.task_status import StatusType, TaskStatus
 from app.models.user import User, UserRole
+from app.models.username_history import UsernameHistory
 
 __all__ = [
     "ActivityLog",
@@ -32,4 +33,5 @@ __all__ = [
     "TaskStatus",
     "User",
     "UserRole",
+    "UsernameHistory",
 ]

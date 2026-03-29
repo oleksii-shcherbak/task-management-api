@@ -295,6 +295,68 @@ async def test_cannot_remove_owner(client: AsyncClient):
     assert response.status_code == 403
 
 
+# --- Member Search ---
+
+
+@pytest.mark.asyncio
+async def test_member_search_returns_matching_members(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    token_bob = await register_and_login(client, {**USER_BOB, "username": "bob_worker"})
+    project = await create_project(client, token)
+    headers = await auth_headers(token)
+
+    bob_me = (
+        await client.get("/api/v1/users/me", headers=await auth_headers(token_bob))
+    ).json()
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=headers,
+        json={"user_id": bob_me["id"]},
+    )
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/members/search",
+        headers=headers,
+        params={"q": "bob"},
+    )
+    assert response.status_code == 200
+    results = response.json()
+    assert len(results) == 1
+    assert results[0]["username"] == "bob_worker"
+    assert "full_name" in results[0]
+    assert "avatar_url" in results[0]
+
+
+@pytest.mark.asyncio
+async def test_member_search_does_not_leak_non_members(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    await register_and_login(client, {**USER_BOB, "username": "bob_outside"})
+    project = await create_project(client, token)
+    headers = await auth_headers(token)
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/members/search",
+        headers=headers,
+        params={"q": "bob"},
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_member_search_non_member_returns_403(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    token_bob = await register_and_login(client, USER_BOB)
+    project = await create_project(client, token)
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/members/search",
+        headers=await auth_headers(token_bob),
+        params={"q": "a"},
+    )
+    assert response.status_code == 403
+
+
 # --- Pagination ---
 
 

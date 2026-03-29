@@ -51,3 +51,10 @@ class MemberResponse(BaseModel):
 
 class MemberRoleUpdate(BaseModel):
     role: ProjectRole
+
+
+class MemberSearchResult(BaseModel):
+    user_id: int
+    username: str
+    full_name: str
+    avatar_url: str | None

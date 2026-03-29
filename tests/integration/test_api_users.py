@@ -158,6 +158,36 @@ async def test_get_me_includes_username(client: AsyncClient):
     assert "username" in response.json()
 
 
+@pytest.mark.asyncio
+async def test_update_username_cooldown_blocks_second_change(client: AsyncClient):
+    token = await register_and_login(client)
+    await client.patch(
+        "/api/v1/users/me", headers=auth(token), json={"username": "first_name"}
+    )
+    response = await client.patch(
+        "/api/v1/users/me", headers=auth(token), json={"username": "second_name"}
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_username_recently_released_is_reserved(client: AsyncClient):
+    # Alice claims a specific username
+    token_alice = await register_and_login(client, USER)
+    await client.patch(
+        "/api/v1/users/me",
+        headers=auth(token_alice),
+        json={"username": "prized_handle"},
+    )
+
+    # Bob tries to claim the same active username - blocked via active user check
+    token_bob = await register_and_login(client, OTHER_USER)
+    response = await client.patch(
+        "/api/v1/users/me", headers=auth(token_bob), json={"username": "prized_handle"}
+    )
+    assert response.status_code == 409
+
+
 # --- PATCH /users/me/password ---
 
 

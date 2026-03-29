@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from app.models.project_member import ProjectMember
     from app.models.refresh_token import RefreshToken
     from app.models.task import Task
+    from app.models.username_history import UsernameHistory
 
 
 class UserRole(PyEnum):
@@ -128,6 +129,10 @@ class User(Base):
 
     password_reset_tokens: Mapped[list[PasswordResetToken]] = relationship(
         "PasswordResetToken", back_populates="user", cascade="all, delete-orphan"
+    )
+
+    username_history: Mapped[list[UsernameHistory]] = relationship(
+        "UsernameHistory", back_populates="user", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:

@@ -29,6 +29,7 @@ from app.schemas.project import (
     MemberAddRequest,
     MemberResponse,
     MemberRoleUpdate,
+    MemberSearchResult,
     ProjectCreate,
     ProjectResponse,
     ProjectUpdate,
@@ -315,6 +316,40 @@ async def list_members(
         select(ProjectMember).where(ProjectMember.project_id == project_id)
     )
     return list(result.scalars().all())
+
+
+@router.get("/{project_id}/members/search", response_model=list[MemberSearchResult])
+async def search_members(
+    project_id: int,
+    q: str = Query(min_length=1),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> list[MemberSearchResult]:
+    await get_project_or_404(project_id, db)
+    await get_member_or_403_cached(project_id, current_user.id, db, redis)
+
+    result = await db.execute(
+        select(User)
+        .join(ProjectMember, ProjectMember.user_id == User.id)
+        .where(
+            ProjectMember.project_id == project_id,
+            User.deleted_at.is_(None),
+            User.username.ilike(f"{q}%"),
+        )
+        .order_by(User.username)
+        .limit(10)
+    )
+    users = result.scalars().all()
+    return [
+        MemberSearchResult(
+            user_id=u.id,
+            username=u.username,
+            full_name=u.name,
+            avatar_url=u.avatar_url,
+        )
+        for u in users
+    ]
 
 
 @router.delete(
