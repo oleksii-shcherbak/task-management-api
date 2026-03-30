@@ -1,6 +1,7 @@
 from app.models.activity_log import ActivityLog
 from app.models.attachment import Attachment
 from app.models.comment import Comment
+from app.models.comment_mention import CommentMention
 from app.models.email_verification_token import EmailVerificationToken
 from app.models.oauth_account import OAuthAccount, OAuthProvider
 from app.models.password_reset_token import PasswordResetToken
@@ -9,6 +10,7 @@ from app.models.project_member import ProjectMember, ProjectRole
 from app.models.refresh_token import RefreshToken
 from app.models.task import Task, TaskPriority
 from app.models.task_assignee import TaskAssignee
+from app.models.task_mention import TaskMention
 from app.models.task_status import StatusType, TaskStatus
 from app.models.user import User, UserRole
 from app.models.username_history import UsernameHistory
@@ -17,6 +19,7 @@ __all__ = [
     "ActivityLog",
     "Attachment",
     "Comment",
+    "CommentMention",
     "EmailVerificationToken",
     "OAuthAccount",
     "OAuthProvider",
@@ -29,6 +32,7 @@ __all__ = [
     "StatusType",
     "Task",
     "TaskAssignee",
+    "TaskMention",
     "TaskPriority",
     "TaskStatus",
     "User",

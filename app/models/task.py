@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from app.models.comment import Comment
     from app.models.project import Project
     from app.models.task_assignee import TaskAssignee
+    from app.models.task_mention import TaskMention
     from app.models.task_status import TaskStatus
     from app.models.user import User
 
@@ -100,6 +101,16 @@ class Task(Base):
     )
     attachments: Mapped[list[Attachment]] = relationship(
         "Attachment", back_populates="task", cascade="all, delete-orphan"
+    )
+    mention_records: Mapped[list[TaskMention]] = relationship(
+        "TaskMention", cascade="all, delete-orphan"
+    )
+    mentions: Mapped[list[User]] = relationship(
+        "User",
+        secondary="task_mentions",
+        primaryjoin="Task.id == TaskMention.task_id",
+        secondaryjoin="TaskMention.user_id == User.id",
+        viewonly=True,
     )
 
     def __repr__(self) -> str:

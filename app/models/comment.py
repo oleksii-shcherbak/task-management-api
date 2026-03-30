@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.comment_mention import CommentMention
     from app.models.task import Task
     from app.models.user import User
 
@@ -47,6 +48,16 @@ class Comment(Base):
 
     task: Mapped[Task] = relationship("Task", back_populates="comments")
     author: Mapped[User | None] = relationship("User", back_populates="comments")
+    mention_records: Mapped[list[CommentMention]] = relationship(
+        "CommentMention", cascade="all, delete-orphan"
+    )
+    mentions: Mapped[list[User]] = relationship(
+        "User",
+        secondary="comment_mentions",
+        primaryjoin="Comment.id == CommentMention.comment_id",
+        secondaryjoin="CommentMention.user_id == User.id",
+        viewonly=True,
+    )
 
     def __repr__(self) -> str:
         return (

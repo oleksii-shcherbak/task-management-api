@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.models.task import TaskPriority
 from app.models.task_status import StatusType
+from app.schemas.comment import MentionedUser
 
 
 class TaskStatusResponse(BaseModel):
@@ -52,6 +53,7 @@ class TaskResponse(BaseModel):
     description: str | None
     status: TaskStatusResponse
     assignees: list[AssigneeResponse]
+    mentions: list[MentionedUser] = []
     priority: TaskPriority | None
     position: int
     due_date: datetime | None
