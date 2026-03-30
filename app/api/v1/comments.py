@@ -1,18 +1,21 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, tuple_
+from sqlalchemy import delete, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, get_member_or_403, get_project_or_404
+from app.core.arq_pool import get_arq_pool
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.database import get_db
 from app.models.comment import Comment
+from app.models.comment_mention import CommentMention
 from app.models.project_member import ProjectRole
 from app.models.task import Task
 from app.models.user import User
 from app.schemas.comment import CommentCreate, CommentResponse, CommentUpdate
+from app.utils.mentions import parse_mentioned_usernames, resolve_mention_user_ids
 from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 
 # Routes that need project + task context: /projects/{project_id}/tasks/{task_id}/comments
@@ -26,7 +29,10 @@ async def get_comment_or_404(comment_id: int, db: AsyncSession) -> Comment:
     result = await db.execute(
         select(Comment)
         .where(Comment.id == comment_id)
-        .options(selectinload(Comment.author))
+        .options(
+            selectinload(Comment.author),
+            selectinload(Comment.mentions),
+        )
     )
     comment = result.scalar_one_or_none()
     if comment is None:
@@ -59,12 +65,10 @@ async def add_comment(
     body: CommentCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    arq_pool=Depends(get_arq_pool),
 ):
-    # Verify project exists and user is a member
     await get_project_or_404(project_id, db)
     await get_member_or_403(project_id, current_user.id, db)
-
-    # Verify task belongs to this project and isn't deleted
     await get_task_or_404(task_id, project_id, db)
 
     comment = Comment(
@@ -73,9 +77,29 @@ async def add_comment(
         content=body.content,
     )
     db.add(comment)
+    await db.flush()
+
+    mentioned_ids = await resolve_mention_user_ids(
+        parse_mentioned_usernames(body.content),
+        project_id,
+        current_user.id,
+        db,
+    )
+    for uid in mentioned_ids:
+        db.add(CommentMention(comment_id=comment.id, user_id=uid))
+
     await db.commit()
 
-    # Re-fetch with author loaded - can't access relationships after commit without this
+    for uid in mentioned_ids:
+        await arq_pool.enqueue_job(
+            "send_mention_notification",
+            user_id=uid,
+            actor_name=current_user.name,
+            source_type="comment",
+            source_id=comment.id,
+            body_excerpt=body.content[:200],
+        )
+
     return await get_comment_or_404(comment.id, db)
 
 
@@ -104,7 +128,7 @@ async def list_comments(
     query = (
         select(Comment)
         .where(Comment.task_id == task_id)
-        .options(selectinload(Comment.author))
+        .options(selectinload(Comment.author), selectinload(Comment.mentions))
     )
 
     if cursor_data is not None:
@@ -139,16 +163,51 @@ async def edit_comment(
     body: CommentUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    arq_pool=Depends(get_arq_pool),
 ):
     comment = await get_comment_or_404(comment_id, db)
 
-    # Only the author can edit their own comment
     if comment.user_id != current_user.id:
         raise ForbiddenError("You can only edit your own comments")
+
+    task_result = await db.execute(select(Task).where(Task.id == comment.task_id))
+    task = task_result.scalar_one()
+
+    existing_ids = {m.user_id for m in comment.mentions}
+    new_ids = await resolve_mention_user_ids(
+        parse_mentioned_usernames(body.content),
+        task.project_id,
+        current_user.id,
+        db,
+    )
+
+    removed_ids = existing_ids - new_ids
+    added_ids = new_ids - existing_ids
+
+    if removed_ids:
+        await db.execute(
+            delete(CommentMention).where(
+                CommentMention.comment_id == comment_id,
+                CommentMention.user_id.in_(removed_ids),
+            )
+        )
+    for uid in added_ids:
+        db.add(CommentMention(comment_id=comment_id, user_id=uid))
 
     comment.content = body.content
     comment.edited_at = datetime.now(UTC)
     await db.commit()
+    db.expunge(comment)
+
+    for uid in added_ids:
+        await arq_pool.enqueue_job(
+            "send_mention_notification",
+            user_id=uid,
+            actor_name=current_user.name,
+            source_type="comment",
+            source_id=comment_id,
+            body_excerpt=body.content[:200],
+        )
 
     return await get_comment_or_404(comment.id, db)
 

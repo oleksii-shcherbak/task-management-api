@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import func, select, tuple_, update
+from sqlalchemy import delete, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -14,11 +14,13 @@ from app.models.project import Project
 from app.models.project_member import ProjectMember, ProjectRole
 from app.models.task import Task, TaskPriority
 from app.models.task_assignee import TaskAssignee
+from app.models.task_mention import TaskMention
 from app.models.task_status import TaskStatus
 from app.models.user import User
 from app.schemas.activity_log import ActivityLogResponse
 from app.schemas.task import TaskCreate, TaskReorder, TaskResponse, TaskUpdate
 from app.services import task_service
+from app.utils.mentions import parse_mentioned_usernames, resolve_mention_user_ids
 from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 
 project_tasks_router = APIRouter(prefix="/projects", tags=["Tasks"])
@@ -32,6 +34,8 @@ async def get_task_or_404(task_id: int, db: AsyncSession) -> Task:
             selectinload(Task.status),
             selectinload(Task.assignees),
             selectinload(Task.task_assignees).selectinload(TaskAssignee.user),
+            selectinload(Task.mentions),
+            selectinload(Task.mention_records),
         )
         .where(
             Task.id == task_id,
@@ -146,6 +150,15 @@ async def create_task(
         new_value=body.title,
     )
 
+    mentioned_ids = await resolve_mention_user_ids(
+        parse_mentioned_usernames(body.description),
+        project_id,
+        current_user.id,
+        db,
+    )
+    for uid in mentioned_ids:
+        db.add(TaskMention(task_id=task.id, user_id=uid))
+
     await db.commit()
 
     for uid in body.assignee_ids:
@@ -157,6 +170,15 @@ async def create_task(
                 task_title=task.title,
                 project_name=project.name,
             )
+    for uid in mentioned_ids:
+        await arq_pool.enqueue_job(
+            "send_mention_notification",
+            user_id=uid,
+            actor_name=current_user.name,
+            source_type="task",
+            source_id=task.id,
+            body_excerpt=(body.description or "")[:200],
+        )
 
     return await get_task_or_404(task.id, db)
 
@@ -188,7 +210,11 @@ async def list_tasks(
 
     query = (
         select(Task)
-        .options(selectinload(Task.status), selectinload(Task.assignees))
+        .options(
+            selectinload(Task.status),
+            selectinload(Task.assignees),
+            selectinload(Task.mentions),
+        )
         .where(
             Task.project_id == project_id,
             Task.deleted_at.is_(None),
@@ -302,7 +328,7 @@ async def _enqueue_update_notifications(
 
 
 @tasks_router.patch("/{task_id}", response_model=TaskResponse)
-async def update_task(
+async def update_task(  # noqa: PLR0912, PLR0915
     task_id: int,
     body: TaskUpdate,
     current_user: User = Depends(get_current_user),
@@ -386,6 +412,29 @@ async def update_task(
         )
         project_name = result.scalar_one()
 
+    # Compute mention diff before the update mutates the task in memory
+    mention_added_ids: set[int] = set()
+    if "description" in update_data:
+        existing_mention_ids = {m.user_id for m in task.mention_records}
+        new_mention_ids = await resolve_mention_user_ids(
+            parse_mentioned_usernames(update_data["description"]),
+            task.project_id,
+            current_user.id,
+            db,
+        )
+        removed_mention_ids = existing_mention_ids - new_mention_ids
+        mention_added_ids = new_mention_ids - existing_mention_ids
+
+        if removed_mention_ids:
+            await db.execute(
+                delete(TaskMention).where(
+                    TaskMention.task_id == task_id,
+                    TaskMention.user_id.in_(removed_mention_ids),
+                )
+            )
+        for uid in mention_added_ids:
+            db.add(TaskMention(task_id=task_id, user_id=uid))
+
     await task_service.update_task(db, task, body, current_user, new_status)
 
     await db.commit()
@@ -403,7 +452,18 @@ async def update_task(
             old_status_name=old_status_name,
         )
 
-    return await get_task_or_404(task.id, db)
+    refreshed = await get_task_or_404(task.id, db)
+    for uid in mention_added_ids:
+        await arq_pool.enqueue_job(
+            "send_mention_notification",
+            user_id=uid,
+            actor_name=current_user.name,
+            source_type="task",
+            source_id=task_id,
+            body_excerpt=(update_data.get("description") or "")[:200],
+        )
+
+    return refreshed
 
 
 # --- Reorder task ---
