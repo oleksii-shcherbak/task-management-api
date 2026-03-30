@@ -8,6 +8,7 @@ from app.database import AsyncSessionLocal
 from app.tasks.email_tasks import (
     send_assignment_notification,
     send_due_date_reminder,
+    send_mention_notification,
     send_password_reset_email,
     send_project_invitation,
     send_status_change_notification,
@@ -26,7 +27,7 @@ async def startup(ctx: dict) -> None:
     ctx["frontend_url"] = settings.FRONTEND_URL
 
 
-async def shutdown(ctx: dict) -> None:
+async def shutdown(_ctx: dict) -> None:
     pass
 
 
@@ -39,6 +40,7 @@ class WorkerSettings:
         send_assignment_notification,
         send_project_invitation,
         send_status_change_notification,
+        send_mention_notification,
     ]
     cron_jobs: ClassVar[list] = [
         cron(send_due_date_reminders, minute=0),

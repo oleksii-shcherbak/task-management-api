@@ -9,6 +9,7 @@ from app.models.user import User
 from app.tasks.email_templates import (
     assignment_notification_email,
     due_date_reminder_email,
+    mention_notification_email,
     password_reset_email,
     project_invitation_email,
     status_change_notification_email,
@@ -164,3 +165,34 @@ async def send_assignment_notification(
         html=html,
     )
     logger.info("assignment_notification_sent", user_id=user_id, task_id=task_id)
+
+
+async def send_mention_notification(
+    ctx: dict,
+    *,
+    user_id: int,
+    actor_name: str,
+    source_type: str,
+    source_id: int,
+    body_excerpt: str,
+) -> None:
+    async with ctx["db_factory"]() as db:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+
+    if user is None:
+        return
+
+    html = mention_notification_email(user.name, actor_name, source_type, body_excerpt)
+    await _send_smtp(
+        ctx,
+        to=user.email,
+        subject=f"{actor_name} mentioned you",
+        html=html,
+    )
+    logger.info(
+        "mention_notification_sent",
+        user_id=user_id,
+        source_type=source_type,
+        source_id=source_id,
+    )

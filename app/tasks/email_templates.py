@@ -80,3 +80,24 @@ def assignment_notification_email(name: str, task_title: str, project_name: str)
     </p>
   </body>
 </html>"""
+
+
+def mention_notification_email(
+    name: str,
+    actor_name: str,
+    source_type: str,
+    body_excerpt: str,
+) -> str:
+    source_label = "comment" if source_type == "comment" else "task"
+    return f"""\
+<html>
+  <body style="font-family: sans-serif; color: #222;">
+    <p>Hi {name},</p>
+    <p>
+      <strong>{actor_name}</strong> mentioned you in a {source_label}:
+    </p>
+    <blockquote style="border-left: 3px solid #ccc; padding-left: 1em; color: #555;">
+      {body_excerpt}
+    </blockquote>
+  </body>
+</html>"""

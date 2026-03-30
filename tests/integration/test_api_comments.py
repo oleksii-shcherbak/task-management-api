@@ -455,3 +455,118 @@ async def test_list_comments_invalid_cursor_returns_422(client: AsyncClient):
         headers=auth_headers(token),
     )
     assert response.status_code == 422
+
+
+# --- @Mentions ---
+
+
+@pytest.mark.asyncio
+async def test_mention_in_comment_resolved_and_stored(client: AsyncClient):
+    token_alice, _ = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_handle"}
+    )
+    _token_bob, bob_id = await register_and_login(
+        client, {**USER_BOB, "username": "bob_handle"}
+    )
+    project = await create_project(client, token_alice)
+    task = await create_task(client, token_alice, project["id"])
+
+    # Add Bob to project
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers(token_alice),
+        json={"user_id": bob_id},
+    )
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        headers=auth_headers(token_alice),
+        json={"content": "Hey @bob_handle, can you check this?"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert len(data["mentions"]) == 1
+    assert data["mentions"][0]["username"] == "bob_handle"
+    assert data["mentions"][0]["full_name"] == USER_BOB["name"]
+
+
+@pytest.mark.asyncio
+async def test_mention_non_member_is_filtered_out(client: AsyncClient):
+    token_alice, _ = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_handle"}
+    )
+    await register_and_login(client, {**USER_BOB, "username": "bob_handle"})
+    project = await create_project(client, token_alice)
+    task = await create_task(client, token_alice, project["id"])
+
+    # Bob is NOT added to the project
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        headers=auth_headers(token_alice),
+        json={"content": "Hey @bob_handle!"},
+    )
+    assert response.status_code == 201
+    assert response.json()["mentions"] == []
+
+
+@pytest.mark.asyncio
+async def test_self_mention_is_filtered_out(client: AsyncClient):
+    token_alice, _ = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_handle"}
+    )
+    project = await create_project(client, token_alice)
+    task = await create_task(client, token_alice, project["id"])
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        headers=auth_headers(token_alice),
+        json={"content": "I did @alice_handle this myself."},
+    )
+    assert response.status_code == 201
+    assert response.json()["mentions"] == []
+
+
+@pytest.mark.asyncio
+async def test_edit_comment_diff_adds_new_mention(client: AsyncClient, arq_mock):
+    token_alice, _ = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_handle"}
+    )
+    _token_bob, bob_id = await register_and_login(
+        client, {**USER_BOB, "username": "bob_handle"}
+    )
+    project = await create_project(client, token_alice)
+    task = await create_task(client, token_alice, project["id"])
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers(token_alice),
+        json={"user_id": bob_id},
+    )
+
+    # Create comment without mention
+    comment = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+            headers=auth_headers(token_alice),
+            json={"content": "No mention yet."},
+        )
+    ).json()
+
+    arq_mock.enqueue_job.reset_mock()
+
+    # Edit to add mention
+    response = await client.patch(
+        f"/api/v1/comments/{comment['id']}",
+        headers=auth_headers(token_alice),
+        json={"content": "Now mentioning @bob_handle."},
+    )
+    assert response.status_code == 200
+    assert len(response.json()["mentions"]) == 1
+
+    arq_mock.enqueue_job.assert_called_once_with(
+        "send_mention_notification",
+        user_id=bob_id,
+        actor_name=USER_ALICE["name"],
+        source_type="comment",
+        source_id=comment["id"],
+        body_excerpt="Now mentioning @bob_handle.",
+    )
