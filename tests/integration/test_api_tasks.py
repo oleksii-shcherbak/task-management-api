@@ -1002,3 +1002,84 @@ async def test_update_task_status_enqueues_notification_for_assignees(
 
     calls = [c.args[0] for c in arq_mock.enqueue_job.call_args_list]
     assert "send_status_change_notification" in calls
+
+
+# --- @Mentions in Tasks ---
+
+
+@pytest.mark.asyncio
+async def test_mention_in_task_description_resolved_and_stored(client: AsyncClient):
+    alice_token = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_task"}
+    )
+    bob_token = await register_and_login(client, {**USER_BOB, "username": "bob_task"})
+    bob_id = (
+        await client.get("/api/v1/users/me", headers=auth_headers(bob_token))
+    ).json()["id"]
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], bob_id)
+
+    task = await create_task(
+        client,
+        alice_token,
+        project["id"],
+        description="Hey @bob_task, please review this.",
+    )
+
+    assert len(task["mentions"]) == 1
+    assert task["mentions"][0]["username"] == "bob_task"
+    assert task["mentions"][0]["full_name"] == USER_BOB["name"]
+
+
+@pytest.mark.asyncio
+async def test_mention_non_member_in_task_is_filtered_out(client: AsyncClient):
+    alice_token = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_task"}
+    )
+    await register_and_login(client, {**USER_BOB, "username": "bob_task"})
+    project = await create_project(client, alice_token)
+    # Bob is not a project member - mention must be silently dropped
+
+    task = await create_task(
+        client,
+        alice_token,
+        project["id"],
+        description="Hey @bob_task!",
+    )
+
+    assert task["mentions"] == []
+
+
+@pytest.mark.asyncio
+async def test_task_edit_diff_adds_new_mention(client: AsyncClient, arq_mock):
+    alice_token = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_task"}
+    )
+    bob_token = await register_and_login(client, {**USER_BOB, "username": "bob_task"})
+    bob_id = (
+        await client.get("/api/v1/users/me", headers=auth_headers(bob_token))
+    ).json()["id"]
+    project = await create_project(client, alice_token)
+    await add_member(client, alice_token, project["id"], bob_id)
+
+    task = await create_task(
+        client, alice_token, project["id"], description="No mention yet."
+    )
+    arq_mock.enqueue_job.reset_mock()
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"description": "Now mentioning @bob_task."},
+        headers=auth_headers(alice_token),
+    )
+    assert response.status_code == 200
+    assert len(response.json()["mentions"]) == 1
+
+    arq_mock.enqueue_job.assert_called_once_with(
+        "send_mention_notification",
+        user_id=bob_id,
+        actor_name=USER_ALICE["name"],
+        source_type="task",
+        source_id=task["id"],
+        body_excerpt="Now mentioning @bob_task.",
+    )
