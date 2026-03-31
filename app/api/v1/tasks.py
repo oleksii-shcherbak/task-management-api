@@ -157,7 +157,7 @@ async def create_task(
         db,
     )
     for uid in mentioned_ids:
-        db.add(TaskMention(task_id=task.id, user_id=uid))
+        db.add(TaskMention(task_id=task.id, user_id=uid, actor_id=current_user.id))
 
     await db.commit()
 
@@ -433,7 +433,7 @@ async def update_task(  # noqa: PLR0912, PLR0915
                 )
             )
         for uid in mention_added_ids:
-            db.add(TaskMention(task_id=task_id, user_id=uid))
+            db.add(TaskMention(task_id=task_id, user_id=uid, actor_id=current_user.id))
 
     await task_service.update_task(db, task, body, current_user, new_status)
 

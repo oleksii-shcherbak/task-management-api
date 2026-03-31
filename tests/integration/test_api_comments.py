@@ -570,3 +570,44 @@ async def test_edit_comment_diff_adds_new_mention(client: AsyncClient, arq_mock)
         source_id=comment["id"],
         body_excerpt="Now mentioning @bob_handle.",
     )
+
+
+@pytest.mark.asyncio
+async def test_edit_comment_with_existing_mention_does_not_re_notify(
+    client: AsyncClient, arq_mock
+):
+    token_alice, _ = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_handle"}
+    )
+    _token_bob, bob_id = await register_and_login(
+        client, {**USER_BOB, "username": "bob_handle"}
+    )
+    project = await create_project(client, token_alice)
+    task = await create_task(client, token_alice, project["id"])
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers(token_alice),
+        json={"user_id": bob_id},
+    )
+
+    # Create comment with an existing mention
+    comment = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+            headers=auth_headers(token_alice),
+            json={"content": "Hey @bob_handle!"},
+        )
+    ).json()
+    assert len(comment["mentions"]) == 1
+
+    arq_mock.enqueue_job.reset_mock()
+
+    # Edit keeping the same mention - should not re-notify
+    response = await client.patch(
+        f"/api/v1/comments/{comment['id']}",
+        headers=auth_headers(token_alice),
+        json={"content": "Hey @bob_handle, updated text."},
+    )
+    assert response.status_code == 200
+    assert len(response.json()["mentions"]) == 1
+    arq_mock.enqueue_job.assert_not_called()

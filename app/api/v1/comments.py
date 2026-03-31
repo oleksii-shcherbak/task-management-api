@@ -86,7 +86,9 @@ async def add_comment(
         db,
     )
     for uid in mentioned_ids:
-        db.add(CommentMention(comment_id=comment.id, user_id=uid))
+        db.add(
+            CommentMention(comment_id=comment.id, user_id=uid, actor_id=current_user.id)
+        )
 
     await db.commit()
 
@@ -173,7 +175,7 @@ async def edit_comment(
     task_result = await db.execute(select(Task).where(Task.id == comment.task_id))
     task = task_result.scalar_one()
 
-    existing_ids = {m.user_id for m in comment.mentions}
+    existing_ids = {m.id for m in comment.mentions}
     new_ids = await resolve_mention_user_ids(
         parse_mentioned_usernames(body.content),
         task.project_id,
@@ -192,7 +194,9 @@ async def edit_comment(
             )
         )
     for uid in added_ids:
-        db.add(CommentMention(comment_id=comment_id, user_id=uid))
+        db.add(
+            CommentMention(comment_id=comment_id, user_id=uid, actor_id=current_user.id)
+        )
 
     comment.content = body.content
     comment.edited_at = datetime.now(UTC)
