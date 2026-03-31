@@ -1,5 +1,11 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.username_history import UsernameHistory
 
 USER = {
     "email": "alice@example.com",
@@ -527,3 +533,30 @@ async def test_mentions_inbox_ordered_newest_first(client: AsyncClient):
 async def test_mentions_inbox_unauthenticated_returns_401(client: AsyncClient):
     r = await client.get("/api/v1/users/me/mentions")
     assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_old_username_claimable_after_released_at(
+    client: AsyncClient, db_session: AsyncSession
+):
+    token_alice = await register_and_login(client, {**USER, "username": "soon_free"})
+    await client.patch(
+        "/api/v1/users/me",
+        json={"username": "alice_new"},
+        headers=auth(token_alice),
+    )
+
+    # Backdate released_at so the reservation has already expired
+    await db_session.execute(
+        update(UsernameHistory)
+        .where(UsernameHistory.old_username == "soon_free")
+        .values(released_at=datetime.now(UTC) - timedelta(seconds=1))
+    )
+    await db_session.commit()
+
+    # Another user can now claim the released username
+    r = await client.post(
+        "/api/v1/auth/register",
+        json={**OTHER_USER, "username": "soon_free"},
+    )
+    assert r.status_code == 201

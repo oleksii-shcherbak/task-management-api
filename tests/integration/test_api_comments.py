@@ -611,3 +611,39 @@ async def test_edit_comment_with_existing_mention_does_not_re_notify(
     assert response.status_code == 200
     assert len(response.json()["mentions"]) == 1
     arq_mock.enqueue_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_mention_resolves_old_username_via_history(client: AsyncClient):
+    token_alice, alice_id = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_old_handle"}
+    )
+    token_bob, _ = await register_and_login(
+        client, {**USER_BOB, "username": "bob_handle"}
+    )
+
+    project = await create_project(client, token_bob)
+    task = await create_task(client, token_bob, project["id"])
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers(token_bob),
+        json={"user_id": alice_id},
+    )
+
+    # Alice changes her username - creates a history row with released_at = now + 30 days
+    await client.patch(
+        "/api/v1/users/me",
+        json={"username": "alice_new_handle"},
+        headers=auth_headers(token_alice),
+    )
+
+    # Bob mentions Alice by her OLD username - history fallback should resolve it
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        headers=auth_headers(token_bob),
+        json={"content": "Hey @alice_old_handle, please review!"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert len(data["mentions"]) == 1
+    assert data["mentions"][0]["id"] == alice_id

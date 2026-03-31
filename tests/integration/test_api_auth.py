@@ -911,3 +911,32 @@ async def test_forgot_password_rate_limit_blocks_excess_requests(client: AsyncCl
     )
     assert response.status_code == 429
     assert response.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+
+
+@pytest.mark.asyncio
+async def test_auto_generated_usernames_are_unique(client: AsyncClient):
+    tokens = []
+    for i in range(3):
+        r = await register_user(
+            client,
+            {
+                "email": f"same_name_{i}@example.com",
+                "password": "securepassword123",
+                "name": "Alice",
+            },
+        )
+        tokens.append(r["access_token"])
+
+    usernames = [
+        (
+            await client.get(
+                "/api/v1/users/me",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        ).json()["username"]
+        for token in tokens
+    ]
+
+    assert len(usernames) == len(set(usernames)), (
+        f"Duplicate usernames generated: {usernames}"
+    )
