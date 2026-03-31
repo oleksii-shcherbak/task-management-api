@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.schemas.auth import RESERVED_USERNAMES, USERNAME_RE
 
@@ -50,3 +50,16 @@ class UserUpdate(BaseModel):
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8)
+
+
+class MentionInboxItem(BaseModel):
+    source_type: str
+    task_id: int
+    project_id: int
+    project_name: str
+    actor_name: str
+    actor_username: str
+    body_excerpt: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

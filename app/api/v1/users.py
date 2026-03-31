@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import filetype
-from fastapi import APIRouter, Depends, UploadFile
-from sqlalchemy import select, update
+from fastapi import APIRouter, Depends, Query, UploadFile
+from sqlalchemy import and_, func, literal, or_, select, union_all, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -17,15 +17,22 @@ from app.core.exceptions import (
 from app.core.security import hash_password, verify_password
 from app.core.storage import StorageService, get_storage_service
 from app.database import get_db
+from app.models.comment import Comment
+from app.models.comment_mention import CommentMention
+from app.models.project import Project
 from app.models.refresh_token import RefreshToken
+from app.models.task import Task
+from app.models.task_mention import TaskMention
 from app.models.user import User
 from app.models.username_history import UsernameHistory
 from app.schemas.user import (
+    MentionInboxItem,
     PasswordChange,
     PublicUserResponse,
     UserResponse,
     UserUpdate,
 )
+from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 
 USERNAME_COOLDOWN_DAYS = 30
 
@@ -183,6 +190,122 @@ async def delete_avatar(
     current_user.avatar_path = None
     current_user.avatar_url = None
     await db.commit()
+
+
+@router.get("/me/mentions", response_model=CursorPage[MentionInboxItem])
+async def get_my_mentions(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    cursor: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+):
+    cursor_data = decode_cursor(cursor) if cursor else None
+    if cursor and cursor_data is None:
+        raise ValidationError("Invalid cursor")
+
+    comment_q = (
+        select(
+            literal("comment").label("source_type"),
+            Comment.id.label("source_id"),
+            Task.id.label("task_id"),
+            Project.id.label("project_id"),
+            Project.name.label("project_name"),
+            User.name.label("actor_name"),
+            User.username.label("actor_username"),
+            func.left(Comment.content, 200).label("body_excerpt"),
+            Comment.created_at.label("created_at"),
+        )
+        .join(Task, Task.id == Comment.task_id)
+        .join(Project, Project.id == Task.project_id)
+        .join(CommentMention, CommentMention.comment_id == Comment.id)
+        .join(User, User.id == CommentMention.actor_id)
+        .where(
+            CommentMention.user_id == current_user.id,
+            CommentMention.actor_id.is_not(None),
+            Task.deleted_at.is_(None),
+        )
+    )
+
+    task_q = (
+        select(
+            literal("task").label("source_type"),
+            Task.id.label("source_id"),
+            Task.id.label("task_id"),
+            Project.id.label("project_id"),
+            Project.name.label("project_name"),
+            User.name.label("actor_name"),
+            User.username.label("actor_username"),
+            func.left(func.coalesce(Task.description, ""), 200).label("body_excerpt"),
+            Task.created_at.label("created_at"),
+        )
+        .join(Project, Project.id == Task.project_id)
+        .join(TaskMention, TaskMention.task_id == Task.id)
+        .join(User, User.id == TaskMention.actor_id)
+        .where(
+            TaskMention.user_id == current_user.id,
+            TaskMention.actor_id.is_not(None),
+            Task.deleted_at.is_(None),
+        )
+    )
+
+    combined = union_all(comment_q, task_q).subquery()
+    q = select(combined)
+
+    if cursor_data is not None:
+        cursor_at = datetime.fromisoformat(cursor_data["created_at"])
+        cs = cursor_data["source_type"]
+        ci = cursor_data["source_id"]
+        q = q.where(
+            or_(
+                combined.c.created_at < cursor_at,
+                and_(
+                    combined.c.created_at == cursor_at,
+                    or_(
+                        combined.c.source_type > cs,
+                        and_(combined.c.source_type == cs, combined.c.source_id > ci),
+                    ),
+                ),
+            )
+        )
+
+    q = q.order_by(
+        combined.c.created_at.desc(),
+        combined.c.source_type.asc(),
+        combined.c.source_id.asc(),
+    ).limit(limit + 1)
+
+    rows = list((await db.execute(q)).all())
+
+    has_more = len(rows) > limit
+    if has_more:
+        rows = rows[:limit]
+
+    items = [
+        MentionInboxItem(
+            source_type=row.source_type,
+            task_id=row.task_id,
+            project_id=row.project_id,
+            project_name=row.project_name,
+            actor_name=row.actor_name,
+            actor_username=row.actor_username,
+            body_excerpt=row.body_excerpt,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+    next_cursor: str | None = None
+    if has_more:
+        last = rows[-1]
+        next_cursor = encode_cursor(
+            {
+                "created_at": last.created_at.isoformat(),
+                "source_type": last.source_type,
+                "source_id": last.source_id,
+            }
+        )
+
+    return CursorPage(items=items, next_cursor=next_cursor, has_more=has_more)
 
 
 @router.get("/{user_id}", response_model=PublicUserResponse)

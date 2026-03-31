@@ -411,3 +411,119 @@ async def test_delete_avatar_when_none_is_noop(client: AsyncClient):
 
     r = await client.delete("/api/v1/users/me/avatar", headers=auth(token))
     assert r.status_code == 204
+
+
+# --- GET /users/me/mentions ---
+
+
+async def _setup_mention_project(client, actor_token, mentioned_token):
+    """Return (project, task) after adding mentioned user as a project member."""
+    actor_id = (await client.get("/api/v1/users/me", headers=auth(actor_token))).json()[
+        "id"
+    ]
+    mentioned_id = (
+        await client.get("/api/v1/users/me", headers=auth(mentioned_token))
+    ).json()["id"]
+
+    project = (
+        await client.post(
+            "/api/v1/projects",
+            json={"name": "Inbox Project"},
+            headers=auth(actor_token),
+        )
+    ).json()
+    task = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/tasks",
+            json={"title": "Inbox Task"},
+            headers=auth(actor_token),
+        )
+    ).json()
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": mentioned_id},
+        headers=auth(actor_token),
+    )
+    return project, task, actor_id, mentioned_id
+
+
+@pytest.mark.asyncio
+async def test_mentions_inbox_includes_comment_mention(client: AsyncClient):
+    alice_token = await register_and_login(client, {**USER, "username": "alice_inbox"})
+    bob_token = await register_and_login(
+        client, {**OTHER_USER, "username": "bob_inbox"}
+    )
+    project, task, _, _ = await _setup_mention_project(client, alice_token, bob_token)
+
+    await client.post(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        json={"content": "Hey @bob_inbox, take a look!"},
+        headers=auth(alice_token),
+    )
+
+    r = await client.get("/api/v1/users/me/mentions", headers=auth(bob_token))
+    assert r.status_code == 200
+    data = r.json()
+    assert data["has_more"] is False
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    assert item["source_type"] == "comment"
+    assert item["project_id"] == project["id"]
+    assert item["actor_name"] == USER["name"]
+    assert item["actor_username"] == "alice_inbox"
+    assert "bob_inbox" in item["body_excerpt"]
+
+
+@pytest.mark.asyncio
+async def test_mentions_inbox_includes_task_mention(client: AsyncClient):
+    alice_token = await register_and_login(client, {**USER, "username": "alice_inbox"})
+    bob_token = await register_and_login(
+        client, {**OTHER_USER, "username": "bob_inbox"}
+    )
+    project, _, _, _ = await _setup_mention_project(client, alice_token, bob_token)
+
+    await client.post(
+        f"/api/v1/projects/{project['id']}/tasks",
+        json={"title": "Task for Bob", "description": "Hey @bob_inbox!"},
+        headers=auth(alice_token),
+    )
+
+    r = await client.get("/api/v1/users/me/mentions", headers=auth(bob_token))
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert any(i["source_type"] == "task" for i in items)
+    task_item = next(i for i in items if i["source_type"] == "task")
+    assert task_item["actor_username"] == "alice_inbox"
+    assert "bob_inbox" in task_item["body_excerpt"]
+
+
+@pytest.mark.asyncio
+async def test_mentions_inbox_ordered_newest_first(client: AsyncClient):
+    alice_token = await register_and_login(client, {**USER, "username": "alice_inbox"})
+    bob_token = await register_and_login(
+        client, {**OTHER_USER, "username": "bob_inbox"}
+    )
+    project, task, _, _ = await _setup_mention_project(client, alice_token, bob_token)
+
+    await client.post(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        json={"content": "First mention @bob_inbox"},
+        headers=auth(alice_token),
+    )
+    await client.post(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        json={"content": "Second mention @bob_inbox"},
+        headers=auth(alice_token),
+    )
+
+    r = await client.get("/api/v1/users/me/mentions", headers=auth(bob_token))
+    items = r.json()["items"]
+    assert len(items) == 2
+    assert "Second" in items[0]["body_excerpt"]
+    assert "First" in items[1]["body_excerpt"]
+
+
+@pytest.mark.asyncio
+async def test_mentions_inbox_unauthenticated_returns_401(client: AsyncClient):
+    r = await client.get("/api/v1/users/me/mentions")
+    assert r.status_code == 401
