@@ -1,3 +1,5 @@
+from unittest.mock import ANY
+
 import pytest
 from httpx import AsyncClient
 
@@ -611,6 +613,165 @@ async def test_edit_comment_with_existing_mention_does_not_re_notify(
     assert response.status_code == 200
     assert len(response.json()["mentions"]) == 1
     arq_mock.enqueue_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_comment_project_not_found(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+
+    response = await client.post(
+        "/api/v1/projects/99999/tasks/1/comments",
+        json={"content": "Hello"},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_add_comment_task_not_found(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/tasks/99999/comments",
+        json={"content": "Hello"},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_add_comment_sends_mention_notification(client: AsyncClient, arq_mock):
+    token_alice, _ = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_notify"}
+    )
+    _, bob_id = await register_and_login(client, {**USER_BOB, "username": "bob_notify"})
+    project = await create_project(client, token_alice)
+    task = await create_task(client, token_alice, project["id"])
+    await add_member(client, token_alice, project["id"], bob_id)
+
+    arq_mock.enqueue_job.reset_mock()
+
+    await client.post(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+        json={"content": "Hey @bob_notify!"},
+        headers=auth_headers(token_alice),
+    )
+
+    arq_mock.enqueue_job.assert_called_once_with(
+        "send_mention_notification",
+        user_id=bob_id,
+        actor_name=USER_ALICE["name"],
+        source_type="comment",
+        source_id=ANY,
+        body_excerpt="Hey @bob_notify!",
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_comments_requires_auth(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_list_comments_task_not_found(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.get(
+        f"/api/v1/projects/{project['id']}/tasks/99999/comments",
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_edit_comment_not_found(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+
+    response = await client.patch(
+        "/api/v1/comments/99999",
+        json={"content": "Updated"},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_edit_comment_requires_auth(client: AsyncClient):
+    response = await client.patch(
+        "/api/v1/comments/1",
+        json={"content": "Updated"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_edit_comment_removes_mention(client: AsyncClient, arq_mock):
+    token_alice, _ = await register_and_login(
+        client, {**USER_ALICE, "username": "alice_rmv"}
+    )
+    _, bob_id = await register_and_login(client, {**USER_BOB, "username": "bob_rmv"})
+    project = await create_project(client, token_alice)
+    task = await create_task(client, token_alice, project["id"])
+    await add_member(client, token_alice, project["id"], bob_id)
+
+    comment = (
+        await client.post(
+            f"/api/v1/projects/{project['id']}/tasks/{task['id']}/comments",
+            json={"content": "Hey @bob_rmv!"},
+            headers=auth_headers(token_alice),
+        )
+    ).json()
+    assert len(comment["mentions"]) == 1
+
+    response = await client.patch(
+        f"/api/v1/comments/{comment['id']}",
+        json={"content": "Removed the mention."},
+        headers=auth_headers(token_alice),
+    )
+    assert response.status_code == 200
+    assert response.json()["mentions"] == []
+
+
+@pytest.mark.asyncio
+async def test_delete_comment_not_found(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+
+    response = await client.delete(
+        "/api/v1/comments/99999",
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_comment_requires_auth(client: AsyncClient):
+    response = await client.delete("/api/v1/comments/1")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_delete_comment_non_member_forbidden(client: AsyncClient):
+    alice_token, _ = await register_and_login(client, USER_ALICE)
+    bob_token, _ = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    task = await create_task(client, alice_token, project["id"])
+    comment = await add_comment(client, alice_token, project["id"], task["id"])
+
+    # Bob is not a project member
+    response = await client.delete(
+        f"/api/v1/comments/{comment['id']}",
+        headers=auth_headers(bob_token),
+    )
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio
