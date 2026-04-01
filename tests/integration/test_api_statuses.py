@@ -351,3 +351,249 @@ async def test_create_status_invalidates_cache(client: AsyncClient):
     after = await get_statuses(client, token, project["id"])
     assert len(after) == 4
     assert any(s["name"] == "Shipped" for s in after)
+
+
+# --- Auth & access guards (shared across all mutating endpoints) ---
+
+
+@pytest.mark.asyncio
+async def test_create_status_requires_auth(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/statuses",
+        json={"name": "Review", "color": "#a855f7", "type": "started"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_create_status_project_not_found(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.post(
+        "/api/v1/projects/99999/statuses",
+        json={"name": "Review", "color": "#a855f7", "type": "started"},
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_status_plain_member_forbidden(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+
+    bob_id = (
+        await client.get("/api/v1/users/me", headers=await auth_headers(bob_token))
+    ).json()["id"]
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": bob_id, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/statuses",
+        json={"name": "Review", "color": "#a855f7", "type": "started"},
+        headers=await auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_status_requires_auth(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/statuses/{statuses[0]['id']}",
+        json={"name": "New Name"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_update_status_project_not_found(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.patch(
+        "/api/v1/projects/99999/statuses/1",
+        json={"name": "Ghost"},
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_status_plain_member_forbidden(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    statuses = await get_statuses(client, alice_token, project["id"])
+
+    bob_id = (
+        await client.get("/api/v1/users/me", headers=await auth_headers(bob_token))
+    ).json()["id"]
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": bob_id, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/statuses/{statuses[0]['id']}",
+        json={"name": "Hijacked"},
+        headers=await auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_status_duplicate_name_rejected(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    in_progress = next(s for s in statuses if s["name"] == "In Progress")
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/statuses/{in_progress['id']}",
+        json={"name": "Done"},
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_update_status_color_only(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    backlog = next(s for s in statuses if s["name"] == "Backlog")
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/statuses/{backlog['id']}",
+        json={"color": "#ff0000"},
+        headers=await auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["color"] == "#ff0000"
+    assert response.json()["name"] == "Backlog"
+
+
+@pytest.mark.asyncio
+async def test_update_status_reorder_forward(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    backlog = next(s for s in statuses if s["name"] == "Backlog")  # position 1
+
+    await client.patch(
+        f"/api/v1/projects/{project['id']}/statuses/{backlog['id']}",
+        json={"position": 3},
+        headers=await auth_headers(token),
+    )
+
+    updated = await get_statuses(client, token, project["id"])
+    by_position = {s["position"]: s["name"] for s in updated}
+    assert by_position[3] == "Backlog"
+    assert by_position[1] == "In Progress"
+    assert by_position[2] == "Done"
+
+
+@pytest.mark.asyncio
+async def test_update_status_position_clamped_to_total(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    backlog = next(s for s in statuses if s["name"] == "Backlog")  # position 1
+
+    response = await client.patch(
+        f"/api/v1/projects/{project['id']}/statuses/{backlog['id']}",
+        json={"position": 999},
+        headers=await auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["position"] == 3  # clamped to total count
+
+
+@pytest.mark.asyncio
+async def test_delete_status_requires_auth(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    in_progress = next(s for s in statuses if s["name"] == "In Progress")
+
+    response = await client.delete(
+        f"/api/v1/projects/{project['id']}/statuses/{in_progress['id']}"
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_delete_status_project_not_found(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.delete(
+        "/api/v1/projects/99999/statuses/1",
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_status_plain_member_forbidden(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    statuses = await get_statuses(client, alice_token, project["id"])
+    in_progress = next(s for s in statuses if s["name"] == "In Progress")
+
+    bob_id = (
+        await client.get("/api/v1/users/me", headers=await auth_headers(bob_token))
+    ).json()["id"]
+    await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={"user_id": bob_id, "role": "member"},
+        headers=await auth_headers(alice_token),
+    )
+
+    response = await client.delete(
+        f"/api/v1/projects/{project['id']}/statuses/{in_progress['id']}",
+        headers=await auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_status_not_found(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.delete(
+        f"/api/v1/projects/{project['id']}/statuses/99999",
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_status_move_tasks_to_nonexistent_target(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    in_progress = next(s for s in statuses if s["name"] == "In Progress")
+
+    await create_task(client, token, project["id"], in_progress["id"])
+
+    response = await client.delete(
+        f"/api/v1/projects/{project['id']}/statuses/{in_progress['id']}",
+        params={"move_tasks_to": 99999},
+        headers=await auth_headers(token),
+    )
+    assert response.status_code == 404
