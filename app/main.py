@@ -93,8 +93,14 @@ app.add_middleware(
 
 @app.exception_handler(RateLimitError)
 async def rate_limit_exception_handler(
-    _request: Request, exc: RateLimitError
+    request: Request, exc: RateLimitError
 ) -> JSONResponse:
+    logger.warning(
+        "rate_limit_exceeded",
+        method=request.method,
+        path=request.url.path,
+        retry_after=exc.retry_after,
+    )
     return JSONResponse(
         status_code=429,
         content={"error": {"code": exc.code, "message": exc.detail}},
@@ -103,7 +109,15 @@ async def rate_limit_exception_handler(
 
 
 @app.exception_handler(AppException)
-async def app_exception_handler(_request: Request, exc: AppException) -> JSONResponse:
+async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+    if exc.status_code in (401, 403):
+        logger.warning(
+            "security_event",
+            status_code=exc.status_code,
+            code=exc.code,
+            method=request.method,
+            path=request.url.path,
+        )
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": exc.code, "message": exc.detail}},

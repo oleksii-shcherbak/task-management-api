@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime
 
 import jwt
+import structlog
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from redis.asyncio import Redis
@@ -14,6 +15,8 @@ from app.database import get_db
 from app.models.project import Project
 from app.models.project_member import ProjectMember, ProjectRole
 from app.models.user import User
+
+logger = structlog.get_logger()
 
 _MEMBERSHIP_CACHE_TTL = 300  # 5 minutes
 
@@ -28,12 +31,21 @@ async def get_current_user(
         payload = decode_access_token(token)
         user_id: str | None = payload.get("sub")
         if user_id is None:
+            logger.warning("invalid_token", reason="missing_sub")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+    except jwt.ExpiredSignatureError:
+        logger.warning("token_expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
+    except jwt.InvalidTokenError:
+        logger.warning("invalid_token", reason="malformed")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
@@ -43,6 +55,7 @@ async def get_current_user(
     result = await db.execute(select(User).where(User.id == int(user_id)))
     user = result.scalar_one_or_none()
     if user is None or user.deleted_at is not None:
+        logger.warning("auth_failure", reason="user_not_found", user_id=user_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
@@ -53,12 +66,14 @@ async def get_current_user(
     if token_iat and datetime.fromtimestamp(
         token_iat, UTC
     ) < user.password_changed_at.replace(microsecond=0):
+        logger.warning("token_invalidated", user_id=user.id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token invalidated",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    structlog.contextvars.bind_contextvars(user_id=user.id)
     return user
 
 

@@ -2,6 +2,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
+import structlog
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select, update
@@ -42,6 +43,8 @@ from app.schemas.auth import (
 from app.services.github import exchange_code_for_token, fetch_github_profile
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+logger = structlog.get_logger()
 
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9_-]")
 
@@ -152,6 +155,8 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(data.password, user.password_hash):
+        identifier_type = "email" if "@" in data.identifier else "username"
+        logger.warning("login_failed", identifier_type=identifier_type)
         raise UnauthorizedError("Invalid credentials")
 
     response = _prepare_token_response(user.id, db)
