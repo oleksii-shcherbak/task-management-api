@@ -57,7 +57,7 @@ jobs:
         with:
           enable-caching: true
       - run: uv sync --frozen --all-groups
-      - run: uv run pytest --cov=app --cov-report=term-missing
+      - run: uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=70
 
   security:
     runs-on: ubuntu-latest

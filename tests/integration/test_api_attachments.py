@@ -311,3 +311,110 @@ async def test_delete_attachment_not_found(client: AsyncClient):
     r = await client.delete("/api/v1/attachments/99999", headers=auth(token))
 
     assert r.status_code == 404
+
+
+# --- Auth guards ---
+
+
+@pytest.mark.asyncio
+async def test_upload_attachment_requires_auth(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    r = await client.post(
+        f"/api/v1/tasks/{task['id']}/attachments",
+        files={"file": ("test.jpg", JPEG_BYTES, "application/octet-stream")},
+    )
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_list_attachments_requires_auth(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    r = await client.get(f"/api/v1/tasks/{task['id']}/attachments")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_list_attachments_task_not_found(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+
+    r = await client.get("/api/v1/tasks/99999/attachments", headers=auth(token))
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_attachment_url_requires_auth(client: AsyncClient):
+    r = await client.get("/api/v1/attachments/1/url")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_attachment_url_not_found(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+
+    r = await client.get("/api/v1/attachments/99999/url", headers=auth(token))
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_attachment_requires_auth(client: AsyncClient):
+    r = await client.delete("/api/v1/attachments/1")
+    assert r.status_code == 401
+
+
+# --- MIME detection edge cases ---
+
+
+@pytest.mark.asyncio
+async def test_upload_attachment_txt_file(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    r = await client.post(
+        f"/api/v1/tasks/{task['id']}/attachments",
+        files={"file": ("notes.txt", b"hello world", "application/octet-stream")},
+        headers=auth(token),
+    )
+    assert r.status_code == 201
+    assert r.json()["mime_type"] == "text/plain"
+
+
+@pytest.mark.asyncio
+async def test_upload_attachment_csv_file(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    r = await client.post(
+        f"/api/v1/tasks/{task['id']}/attachments",
+        files={"file": ("data.csv", b"a,b,c\n1,2,3", "application/octet-stream")},
+        headers=auth(token),
+    )
+    assert r.status_code == 201
+    assert r.json()["mime_type"] == "text/csv"
+
+
+@pytest.mark.asyncio
+async def test_upload_attachment_unknown_type_rejected(client: AsyncClient):
+    token, _ = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    r = await client.post(
+        f"/api/v1/tasks/{task['id']}/attachments",
+        files={
+            "file": (
+                "weird.xyz",
+                b"random garbage bytes here",
+                "application/octet-stream",
+            )
+        },
+        headers=auth(token),
+    )
+    assert r.status_code == 422
