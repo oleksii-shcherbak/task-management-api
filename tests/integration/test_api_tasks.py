@@ -1083,3 +1083,165 @@ async def test_task_edit_diff_adds_new_mention(client: AsyncClient, arq_mock):
         source_id=task["id"],
         body_excerpt="Now mentioning @bob_task.",
     )
+
+
+# --- Auth & not-found guards ---
+
+
+@pytest.mark.asyncio
+async def test_create_task_requires_auth(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/tasks",
+        json={"title": "No token"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_create_task_project_not_found(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.post(
+        "/api/v1/projects/99999/tasks",
+        json={"title": "Ghost"},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_task_invalid_status_returns_404(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    project_a = await create_project(client, alice_token)
+    project_b = await create_project(client, alice_token)
+    statuses_b = await get_statuses(client, alice_token, project_b["id"])
+
+    response = await client.post(
+        f"/api/v1/projects/{project_a['id']}/tasks",
+        json={"title": "Bad status", "status_id": statuses_b["Backlog"]["id"]},
+        headers=auth_headers(alice_token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_requires_auth(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+
+    response = await client.get(f"/api/v1/projects/{project['id']}/tasks")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_project_not_found(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.get(
+        "/api/v1/projects/99999/tasks", headers=auth_headers(token)
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_task_requires_auth(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    response = await client.get(f"/api/v1/tasks/{task['id']}")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_update_task_requires_auth(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}", json={"title": "No token"}
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_update_task_not_found(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.patch(
+        "/api/v1/tasks/99999",
+        json={"title": "Ghost"},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_task_non_member_forbidden(client: AsyncClient):
+    alice_token = await register_and_login(client, USER_ALICE)
+    bob_token = await register_and_login(client, USER_BOB)
+    project = await create_project(client, alice_token)
+    task = await create_task(client, alice_token, project["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"title": "Hijack"},
+        headers=auth_headers(bob_token),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_task_same_status_id_is_accepted(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    task = await create_task(client, token, project["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"status_id": statuses["Backlog"]["id"]},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"]["name"] == "Backlog"
+
+
+@pytest.mark.asyncio
+async def test_delete_task_requires_auth(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    task = await create_task(client, token, project["id"])
+
+    response = await client.delete(f"/api/v1/tasks/{task['id']}")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_reorder_task_requires_auth(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+    project = await create_project(client, token)
+    statuses = await get_statuses(client, token, project["id"])
+    task = await create_task(client, token, project["id"])
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task['id']}/position",
+        json={"status_id": statuses["Backlog"]["id"], "position": 1},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_reorder_task_not_found(client: AsyncClient):
+    token = await register_and_login(client, USER_ALICE)
+
+    response = await client.patch(
+        "/api/v1/tasks/99999/position",
+        json={"status_id": 1, "position": 1},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 404
