@@ -29,6 +29,21 @@ from app.schemas.task import TaskStatusResponse
 router = APIRouter(prefix="/projects/{project_id}/statuses", tags=["statuses"])
 
 
+async def _get_status_or_404(
+    project_id: int, status_id: int, db: AsyncSession
+) -> TaskStatus:
+    result = await db.execute(
+        select(TaskStatus).where(
+            TaskStatus.id == status_id,
+            TaskStatus.project_id == project_id,
+        )
+    )
+    status_obj: TaskStatus | None = result.scalar_one_or_none()
+    if status_obj is None:
+        raise NotFoundError("Status not found")
+    return status_obj
+
+
 @router.post("", response_model=TaskStatusResponse, status_code=status.HTTP_201_CREATED)
 async def create_status(
     project_id: int,
@@ -91,15 +106,7 @@ async def update_status(
     if member.role not in (ProjectRole.OWNER, ProjectRole.MANAGER):
         raise ForbiddenError("Only owners and managers can manage statuses")
 
-    result = await db.execute(
-        select(TaskStatus).where(
-            TaskStatus.id == status_id,
-            TaskStatus.project_id == project_id,
-        )
-    )
-    status_obj = result.scalar_one_or_none()
-    if status_obj is None:
-        raise NotFoundError("Status not found")
+    status_obj = await _get_status_or_404(project_id, status_id, db)
 
     if body.name is not None:
         duplicate = await db.execute(
@@ -119,7 +126,7 @@ async def update_status(
         status_obj.color = body.color
 
     if body.is_default is not None:
-        if body.is_default is False:
+        if not body.is_default:
             raise ValidationError(
                 "Cannot unset the default directly. Set another status as default instead."
             )
@@ -139,7 +146,7 @@ async def update_status(
         count_result = await db.execute(
             select(func.count()).where(TaskStatus.project_id == project_id)
         )
-        total = count_result.scalar()
+        total: int = count_result.scalar() or 0
         new_position = min(body.position, total)
 
         if new_position != old_position:
@@ -187,15 +194,7 @@ async def delete_status(
     if member.role not in (ProjectRole.OWNER, ProjectRole.MANAGER):
         raise ForbiddenError("Only owners and managers can manage statuses")
 
-    result = await db.execute(
-        select(TaskStatus).where(
-            TaskStatus.id == status_id,
-            TaskStatus.project_id == project_id,
-        )
-    )
-    status_obj = result.scalar_one_or_none()
-    if status_obj is None:
-        raise NotFoundError("Status not found")
+    status_obj = await _get_status_or_404(project_id, status_id, db)
 
     if status_obj.is_default:
         raise ValidationError(
@@ -229,7 +228,7 @@ async def delete_status(
             Task.deleted_at.is_(None),
         )
     )
-    if task_count_result.scalar() > 0:
+    if (task_count_result.scalar() or 0) > 0:
         if move_tasks_to is None:
             raise ValidationError(
                 "This status has tasks. Provide move_tasks_to to migrate them before deleting."

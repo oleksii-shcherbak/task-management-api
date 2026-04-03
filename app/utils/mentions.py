@@ -11,7 +11,7 @@ from app.models.username_history import UsernameHistory
 _MENTION_RE = re.compile(r"@([a-z0-9_-]{3,30})")
 
 
-def parse_mentioned_usernames(text: str) -> set[str]:
+def parse_mentioned_usernames(text: str | None) -> set[str]:
     return set(_MENTION_RE.findall(text or ""))
 
 

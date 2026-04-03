@@ -53,7 +53,7 @@ async def get_current_user(
         ) from None
 
     result = await db.execute(select(User).where(User.id == int(user_id)))
-    user = result.scalar_one_or_none()
+    user: User | None = result.scalar_one_or_none()
     if user is None or user.deleted_at is not None:
         logger.warning("auth_failure", reason="user_not_found", user_id=user_id)
         raise HTTPException(
@@ -62,7 +62,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token_iat = payload.get("iat")
+    token_iat: float | None = payload.get("iat")
     if token_iat and datetime.fromtimestamp(
         token_iat, UTC
     ) < user.password_changed_at.replace(microsecond=0):
@@ -84,7 +84,7 @@ async def get_project_or_404(project_id: int, db: AsyncSession) -> Project:
             Project.deleted_at.is_(None),
         )
     )
-    project = result.scalar_one_or_none()
+    project: Project | None = result.scalar_one_or_none()
     if project is None:
         raise NotFoundError("Project not found")
     return project
@@ -99,7 +99,7 @@ async def get_member_or_403(
             ProjectMember.user_id == user_id,
         )
     )
-    member = result.scalar_one_or_none()
+    member: ProjectMember | None = result.scalar_one_or_none()
     if member is None:
         raise ForbiddenError("You are not a member of this project")
     return member

@@ -374,7 +374,7 @@ async def remove_member(
             ProjectMember.user_id == user_id,
         )
     )
-    target = result.scalar_one_or_none()
+    target: ProjectMember | None = result.scalar_one_or_none()
     if target is None:
         raise NotFoundError("Member not found")
     if target.role == ProjectRole.OWNER:
@@ -409,7 +409,7 @@ async def update_member_role(
             ProjectMember.user_id == user_id,
         )
     )
-    target = result.scalar_one_or_none()
+    target: ProjectMember | None = result.scalar_one_or_none()
     if target is None:
         raise NotFoundError("Member not found")
     if target.role == ProjectRole.OWNER:

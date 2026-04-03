@@ -81,12 +81,37 @@ def _prepare_token_response(user_id: int, db: AsyncSession) -> TokenResponse:
     return TokenResponse(access_token=access_token, refresh_token=plain_refresh_token)
 
 
+async def _issue_verification_email(user_id: int, db: AsyncSession, arq_pool) -> None:
+    """Add a fresh email verification token to the session, commit, and enqueue the send job."""
+    plain_token = generate_refresh_token()
+    db.add(
+        EmailVerificationToken(
+            token_hash=hash_token(plain_token),
+            user_id=user_id,
+            expires_at=datetime.now(UTC) + timedelta(hours=24),
+        )
+    )
+    await db.commit()
+    await arq_pool.enqueue_job(
+        "send_verification_email", user_id=user_id, token=plain_token
+    )
+
+
+async def _revoke_all_refresh_tokens(user_id: int, db: AsyncSession) -> None:
+    """Mark all active refresh tokens for a user as revoked (caller must commit)."""
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user_id, RefreshToken.is_revoked.is_(False))
+        .values(is_revoked=True)
+    )
+
+
 @router.post("/register", response_model=TokenResponse, status_code=201)
 async def register(
     data: RegisterRequest,
     db: AsyncSession = Depends(get_db),
     arq_pool=Depends(get_arq_pool),
-):
+) -> TokenResponse:
     result = await db.execute(
         select(User).where(User.email == data.email, User.deleted_at.is_(None))
     )
@@ -121,22 +146,7 @@ async def register(
         user.username = await _resolve_username(base, user.id, db)
 
     response = _prepare_token_response(user.id, db)
-
-    plain_verification_token = generate_refresh_token()
-    db.add(
-        EmailVerificationToken(
-            token_hash=hash_token(plain_verification_token),
-            user_id=user.id,
-            expires_at=datetime.now(UTC) + timedelta(hours=24),
-        )
-    )
-
-    await db.commit()
-    await arq_pool.enqueue_job(
-        "send_verification_email",
-        user_id=user.id,
-        token=plain_verification_token,
-    )
+    await _issue_verification_email(user.id, db, arq_pool)
     return response
 
 
@@ -145,14 +155,16 @@ async def register(
     response_model=TokenResponse,
     dependencies=[Depends(RateLimiter(limit=5, window=60))],
 )
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(
+    data: LoginRequest, db: AsyncSession = Depends(get_db)
+) -> TokenResponse:
     if "@" in data.identifier:
         condition = User.email == data.identifier
     else:
         condition = User.username == data.identifier
 
     result = await db.execute(select(User).where(condition, User.deleted_at.is_(None)))
-    user = result.scalar_one_or_none()
+    user: User | None = result.scalar_one_or_none()
 
     if not user or not verify_password(data.password, user.password_hash):
         identifier_type = "email" if "@" in data.identifier else "username"
@@ -165,13 +177,15 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
+async def refresh(
+    data: RefreshRequest, db: AsyncSession = Depends(get_db)
+) -> TokenResponse:
     token_hash = hash_token(data.refresh_token)
 
     result = await db.execute(
         select(RefreshToken).where(RefreshToken.token_hash == token_hash)
     )
-    stored_token = result.scalar_one_or_none()
+    stored_token: RefreshToken | None = result.scalar_one_or_none()
 
     if (
         not stored_token
@@ -188,13 +202,13 @@ async def refresh(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/logout", status_code=204)
-async def logout(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
+async def logout(data: RefreshRequest, db: AsyncSession = Depends(get_db)) -> None:
     token_hash = hash_token(data.refresh_token)
 
     result = await db.execute(
         select(RefreshToken).where(RefreshToken.token_hash == token_hash)
     )
-    stored_token = result.scalar_one_or_none()
+    stored_token: RefreshToken | None = result.scalar_one_or_none()
 
     if stored_token:
         stored_token.is_revoked = True
@@ -202,7 +216,9 @@ async def logout(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/verify-email")
-async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
+async def verify_email(
+    token: str, db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
     token_hash = hash_token(token)
 
     result = await db.execute(
@@ -210,7 +226,7 @@ async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
             EmailVerificationToken.token_hash == token_hash
         )
     )
-    record = result.scalar_one_or_none()
+    record: EmailVerificationToken | None = result.scalar_one_or_none()
 
     if (
         not record
@@ -222,9 +238,9 @@ async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
     record.used_at = datetime.now(UTC)
 
     result = await db.execute(select(User).where(User.id == record.user_id))
-    user = result.scalar_one_or_none()
-    if user:
-        user.is_verified = True
+    verification_user: User | None = result.scalar_one_or_none()
+    if verification_user:
+        verification_user.is_verified = True
 
     await db.commit()
     return {"message": "Email verified successfully"}
@@ -238,7 +254,7 @@ async def resend_verification(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     arq_pool=Depends(get_arq_pool),
-):
+) -> dict[str, str]:
     if current_user.is_verified:
         raise ConflictError("Email is already verified")
 
@@ -252,25 +268,12 @@ async def resend_verification(
         .values(used_at=datetime.now(UTC))
     )
 
-    plain_token = generate_refresh_token()
-    db.add(
-        EmailVerificationToken(
-            token_hash=hash_token(plain_token),
-            user_id=current_user.id,
-            expires_at=datetime.now(UTC) + timedelta(hours=24),
-        )
-    )
-    await db.commit()
-    await arq_pool.enqueue_job(
-        "send_verification_email",
-        user_id=current_user.id,
-        token=plain_token,
-    )
+    await _issue_verification_email(current_user.id, db, arq_pool)
     return {"message": "Verification email sent"}
 
 
 @router.get("/github")
-async def github_oauth_redirect():
+async def github_oauth_redirect() -> RedirectResponse:
     params = urlencode(
         {
             "client_id": settings.GITHUB_CLIENT_ID,
@@ -282,7 +285,9 @@ async def github_oauth_redirect():
 
 
 @router.get("/github/callback", response_model=TokenResponse)
-async def github_oauth_callback(code: str, db: AsyncSession = Depends(get_db)):
+async def github_oauth_callback(
+    code: str, db: AsyncSession = Depends(get_db)
+) -> TokenResponse:
     github_token = await exchange_code_for_token(
         code,
         settings.GITHUB_CLIENT_ID,
@@ -292,11 +297,12 @@ async def github_oauth_callback(code: str, db: AsyncSession = Depends(get_db)):
     profile = await fetch_github_profile(github_token)
 
     github_id = str(profile["id"])
-    email = profile.get("email")
-    name = profile.get("name") or profile.get("login") or email
+    email: str | None = profile.get("email")
 
     if not email:
         raise ValidationError("GitHub account has no accessible email address")
+
+    name: str = profile.get("name") or profile.get("login") or email
 
     result = await db.execute(
         select(OAuthAccount).where(
@@ -304,7 +310,7 @@ async def github_oauth_callback(code: str, db: AsyncSession = Depends(get_db)):
             OAuthAccount.provider_user_id == github_id,
         )
     )
-    oauth_account = result.scalar_one_or_none()
+    oauth_account: OAuthAccount | None = result.scalar_one_or_none()
 
     if oauth_account:
         oauth_account.access_token = github_token
@@ -315,10 +321,10 @@ async def github_oauth_callback(code: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(User).where(User.email == email, User.deleted_at.is_(None))
     )
-    user = result.scalar_one_or_none()
+    user: User | None = result.scalar_one_or_none()
 
     if not user:
-        user = User(
+        resolved_user = User(
             email=email,
             name=name,
             username="_",
@@ -326,23 +332,26 @@ async def github_oauth_callback(code: str, db: AsyncSession = Depends(get_db)):
             is_verified=True,
             password_changed_at=datetime.now(UTC),
         )
-        db.add(user)
+        db.add(resolved_user)
         await db.flush()
         base = _slugify_name(name)
-        user.username = await _resolve_username(base, user.id, db)
+        resolved_user.username = await _resolve_username(
+            base, int(resolved_user.id), db
+        )
     else:
-        user.is_verified = True
+        resolved_user = user
+        resolved_user.is_verified = True
 
     db.add(
         OAuthAccount(
-            user_id=user.id,
+            user_id=int(resolved_user.id),
             provider=OAuthProvider.GITHUB,
             provider_user_id=github_id,
             provider_email=email,
             access_token=github_token,
         )
     )
-    response = _prepare_token_response(user.id, db)
+    response = _prepare_token_response(int(resolved_user.id), db)
     await db.commit()
     return response
 
@@ -352,7 +361,7 @@ async def set_password(
     data: SetPasswordRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> None:
     if current_user.password_hash is not None:
         raise ConflictError(
             "Account already has a password - use change-password instead"
@@ -360,14 +369,7 @@ async def set_password(
 
     current_user.password_hash = hash_password(data.password)
     current_user.password_changed_at = datetime.now(UTC)
-
-    await db.execute(
-        update(RefreshToken)
-        .where(
-            RefreshToken.user_id == current_user.id, RefreshToken.is_revoked.is_(False)
-        )
-        .values(is_revoked=True)
-    )
+    await _revoke_all_refresh_tokens(int(current_user.id), db)
     await db.commit()
 
 
@@ -379,11 +381,11 @@ async def forgot_password(
     data: ForgotPasswordRequest,
     db: AsyncSession = Depends(get_db),
     arq_pool=Depends(get_arq_pool),
-):
+) -> dict[str, str]:
     result = await db.execute(
         select(User).where(User.email == data.email, User.deleted_at.is_(None))
     )
-    user = result.scalar_one_or_none()
+    user: User | None = result.scalar_one_or_none()
 
     if user is None:
         # Don't reveal whether the email exists to prevent user enumeration attacks
@@ -423,13 +425,13 @@ async def forgot_password(
 @router.post("/reset-password", status_code=204)
 async def reset_password(
     data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)
-):
+) -> None:
     token_hash = hash_token(data.token)
 
     result = await db.execute(
         select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
     )
-    record = result.scalar_one_or_none()
+    record: PasswordResetToken | None = result.scalar_one_or_none()
 
     if (
         not record
@@ -441,16 +443,9 @@ async def reset_password(
     record.used_at = datetime.now(UTC)
 
     result = await db.execute(select(User).where(User.id == record.user_id))
-    user = result.scalar_one_or_none()
-    if user:
-        user.password_hash = hash_password(data.password)
-        user.password_changed_at = datetime.now(UTC)
-
-    await db.execute(
-        update(RefreshToken)
-        .where(
-            RefreshToken.user_id == record.user_id, RefreshToken.is_revoked.is_(False)
-        )
-        .values(is_revoked=True)
-    )
+    reset_user: User | None = result.scalar_one_or_none()
+    if reset_user:
+        reset_user.password_hash = hash_password(data.password)
+        reset_user.password_changed_at = datetime.now(UTC)
+    await _revoke_all_refresh_tokens(record.user_id, db)
     await db.commit()

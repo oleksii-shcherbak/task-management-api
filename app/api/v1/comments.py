@@ -16,7 +16,7 @@ from app.models.task import Task
 from app.models.user import User
 from app.schemas.comment import CommentCreate, CommentResponse, CommentUpdate
 from app.utils.mentions import parse_mentioned_usernames, resolve_mention_user_ids
-from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
+from app.utils.pagination import CursorPage, decode_cursor, paginate_query
 
 # Routes that need project + task context: /projects/{project_id}/tasks/{task_id}/comments
 project_tasks_router = APIRouter(tags=["Comments"])
@@ -34,7 +34,7 @@ async def get_comment_or_404(comment_id: int, db: AsyncSession) -> Comment:
             selectinload(Comment.mentions),
         )
     )
-    comment = result.scalar_one_or_none()
+    comment: Comment | None = result.scalar_one_or_none()
     if comment is None:
         raise NotFoundError("Comment not found")
     return comment
@@ -48,7 +48,7 @@ async def get_task_or_404(task_id: int, project_id: int, db: AsyncSession) -> Ta
             Task.deleted_at.is_(None),
         )
     )
-    task = result.scalar_one_or_none()
+    task: Task | None = result.scalar_one_or_none()
     if task is None:
         raise NotFoundError("Task not found")
     return task
@@ -66,7 +66,7 @@ async def add_comment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     arq_pool=Depends(get_arq_pool),
-):
+) -> Comment:
     await get_project_or_404(project_id, db)
     await get_member_or_403(project_id, current_user.id, db)
     await get_task_or_404(task_id, project_id, db)
@@ -140,23 +140,14 @@ async def list_comments(
             > (cursor_created_at, cursor_data["id"])
         )
 
-    query = query.order_by(Comment.created_at.asc(), Comment.id.asc()).limit(limit + 1)
+    query = query.order_by(Comment.created_at.asc(), Comment.id.asc())
 
-    result = await db.execute(query)
-    comments = list(result.scalars().all())
-
-    has_more = len(comments) > limit
-    if has_more:
-        comments = comments[:limit]
-
-    next_cursor: str | None = None
-    if has_more:
-        last = comments[-1]
-        next_cursor = encode_cursor(
-            {"created_at": last.created_at.isoformat(), "id": last.id}
-        )
-
-    return CursorPage(items=comments, next_cursor=next_cursor, has_more=has_more)
+    return await paginate_query(
+        db,
+        query,
+        limit,
+        lambda c: {"created_at": c.created_at.isoformat(), "id": c.id},
+    )
 
 
 @comments_router.patch("/{comment_id}", response_model=CommentResponse)
@@ -166,7 +157,7 @@ async def edit_comment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     arq_pool=Depends(get_arq_pool),
-):
+) -> Comment:
     comment = await get_comment_or_404(comment_id, db)
 
     if comment.user_id != current_user.id:
@@ -221,7 +212,7 @@ async def delete_comment(
     comment_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> None:
     comment = await get_comment_or_404(comment_id, db)
 
     # To check project role we need the task's project_id

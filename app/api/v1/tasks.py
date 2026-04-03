@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import delete, func, select, tuple_, update
+from sqlalchemy import asc, delete, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,7 +21,7 @@ from app.schemas.activity_log import ActivityLogResponse
 from app.schemas.task import TaskCreate, TaskReorder, TaskResponse, TaskUpdate
 from app.services import task_service
 from app.utils.mentions import parse_mentioned_usernames, resolve_mention_user_ids
-from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
+from app.utils.pagination import CursorPage, decode_cursor, paginate_query
 
 project_tasks_router = APIRouter(prefix="/projects", tags=["Tasks"])
 tasks_router = APIRouter(prefix="/tasks", tags=["Tasks"])
@@ -42,7 +42,7 @@ async def get_task_or_404(task_id: int, db: AsyncSession) -> Task:
             Task.deleted_at.is_(None),
         )
     )
-    task = result.scalar_one_or_none()
+    task: Task | None = result.scalar_one_or_none()
     if task is None:
         raise NotFoundError("Task not found")
     return task
@@ -90,7 +90,7 @@ async def create_task(
                 TaskStatus.project_id == project_id,
             )
         )
-        task_status = result.scalar_one_or_none()
+        task_status: TaskStatus | None = result.scalar_one_or_none()
         if task_status is None:
             raise NotFoundError("Status not found in this project")
         status_id = task_status.id
@@ -101,7 +101,7 @@ async def create_task(
                 TaskStatus.is_default.is_(True),
             )
         )
-        task_status = result.scalar_one_or_none()
+        task_status: TaskStatus | None = result.scalar_one_or_none()
         if task_status is None:
             raise NotFoundError("No default status found for this project")
         status_id = task_status.id
@@ -230,31 +230,25 @@ async def list_tasks(
             Task.task_assignees.any(TaskAssignee.user_id == assignee_id)
         )
 
+    task_c = Task.__table__.c
     if cursor_data is not None:
         query = query.where(
-            tuple_(Task.status_id, Task.position, Task.id)
-            > (cursor_data["status_id"], cursor_data["position"], cursor_data["id"])
+            tuple_(task_c.status_id, task_c.position, task_c.id)
+            > (
+                int(cursor_data["status_id"]),
+                int(cursor_data["position"]),
+                int(cursor_data["id"]),
+            )
         )
 
-    query = query.order_by(
-        Task.status_id.asc(), Task.position.asc(), Task.id.asc()
-    ).limit(limit + 1)
+    query = query.order_by(asc(task_c.status_id), asc(task_c.position), asc(task_c.id))
 
-    result = await db.execute(query)
-    tasks = list(result.scalars().all())
-
-    has_more = len(tasks) > limit
-    if has_more:
-        tasks = tasks[:limit]
-
-    next_cursor: str | None = None
-    if has_more:
-        last = tasks[-1]
-        next_cursor = encode_cursor(
-            {"status_id": last.status_id, "position": last.position, "id": last.id}
-        )
-
-    return CursorPage(items=tasks, next_cursor=next_cursor, has_more=has_more)
+    return await paginate_query(
+        db,
+        query,
+        limit,
+        lambda t: {"status_id": t.status_id, "position": t.position, "id": t.id},
+    )
 
 
 # --- Get task ---
@@ -547,7 +541,7 @@ async def reorder_task(
             Task.deleted_at.is_(None),
         )
     )
-    column_count = result.scalar()
+    column_count: int = result.scalar() or 0
 
     # Same column: task is already in it, so max stays at column_count
     # Different column: task will be added, so max is column_count + 1

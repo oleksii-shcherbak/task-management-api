@@ -55,7 +55,7 @@ ALLOWED_MIME_TYPES: set[str] = {
 def _detect_mime(data: bytes, filename: str) -> str | None:
     """Detect MIME type from magic bytes, with extension fallback for formats filetype
     can't distinguish (SVG, plain text, Office docs stored as ZIP).
-    Returns None if the format is unrecognised."""
+    Returns None if the format is unrecognized."""
     ext = Path(filename).suffix.lower()
     kind = filetype.guess(data)
 
@@ -86,10 +86,23 @@ async def _get_attachment_or_404(attachment_id: int, db: AsyncSession) -> Attach
         .options(selectinload(Attachment.task))
         .where(Attachment.id == attachment_id)
     )
-    attachment = result.scalar_one_or_none()
+    attachment: Attachment | None = result.scalar_one_or_none()
     if attachment is None:
         raise NotFoundError("Attachment not found")
     return attachment
+
+
+async def _get_task_and_check_member(
+    task_id: int, user_id: int, db: AsyncSession
+) -> Task:
+    result = await db.execute(
+        select(Task).where(Task.id == task_id, Task.deleted_at.is_(None))
+    )
+    task: Task | None = result.scalar_one_or_none()
+    if task is None:
+        raise NotFoundError("Task not found")
+    await get_member_or_403(task.project_id, user_id, db)
+    return task
 
 
 @task_attachments_router.post(
@@ -104,13 +117,7 @@ async def upload_attachment(
     db: AsyncSession = Depends(get_db),
     storage: StorageService = Depends(get_storage_service),
 ) -> AttachmentResponse:
-    result = await db.execute(
-        select(Task).where(Task.id == task_id, Task.deleted_at.is_(None))
-    )
-    task = result.scalar_one_or_none()
-    if task is None:
-        raise NotFoundError("Task not found")
-    await get_member_or_403(task.project_id, current_user.id, db)
+    await _get_task_and_check_member(task_id, current_user.id, db)
 
     data = await file.read()
     if len(data) > MAX_ATTACHMENT_BYTES:
@@ -149,13 +156,7 @@ async def list_attachments(
     db: AsyncSession = Depends(get_db),
     storage: StorageService = Depends(get_storage_service),
 ) -> list[AttachmentResponse]:
-    result = await db.execute(
-        select(Task).where(Task.id == task_id, Task.deleted_at.is_(None))
-    )
-    task = result.scalar_one_or_none()
-    if task is None:
-        raise NotFoundError("Task not found")
-    await get_member_or_403(task.project_id, current_user.id, db)
+    await _get_task_and_check_member(task_id, current_user.id, db)
 
     result = await db.execute(
         select(Attachment)

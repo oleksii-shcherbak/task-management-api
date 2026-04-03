@@ -43,7 +43,7 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
@@ -52,7 +52,7 @@ async def update_me(
     data: UserUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> User:
     updates = data.model_dump(exclude_unset=True)
 
     if "email" in updates and updates["email"] != current_user.email:
@@ -71,7 +71,7 @@ async def update_me(
             .order_by(UsernameHistory.changed_at.desc())
             .limit(1)
         )
-        last_change = recent.scalar_one_or_none()
+        last_change: UsernameHistory | None = recent.scalar_one_or_none()
         if last_change is not None:
             next_allowed = last_change.changed_at + timedelta(
                 days=USERNAME_COOLDOWN_DAYS
@@ -123,7 +123,7 @@ async def change_password(
     data: PasswordChange,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> None:
     if not verify_password(data.current_password, current_user.password_hash):
         raise UnauthorizedError("Current password is incorrect")
 
@@ -144,7 +144,7 @@ async def change_password(
 async def delete_me(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> None:
     current_user.deleted_at = datetime.now(UTC)
     await db.commit()
 
@@ -155,7 +155,7 @@ async def upload_avatar(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     storage: StorageService = Depends(get_storage_service),
-):
+) -> User:
     data = await file.read()
     if len(data) > MAX_AVATAR_BYTES:
         raise ValidationError("Avatar exceeds the 2 MB limit")
@@ -183,7 +183,7 @@ async def delete_avatar(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     storage: StorageService = Depends(get_storage_service),
-):
+) -> None:
     if current_user.avatar_path:
         await storage.delete_file(current_user.avatar_path)
 
@@ -309,11 +309,11 @@ async def get_my_mentions(
 
 
 @router.get("/{user_id}", response_model=PublicUserResponse)
-async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
+async def get_user(user_id: int, db: AsyncSession = Depends(get_db)) -> User:
     result = await db.execute(
         select(User).where(User.id == user_id, User.deleted_at.is_(None))
     )
-    user = result.scalar_one_or_none()
+    user: User | None = result.scalar_one_or_none()
     if user is None:
         raise NotFoundError("User not found")
     return user
