@@ -1,6 +1,7 @@
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import bcrypt
 import jwt
@@ -34,7 +35,9 @@ def verify_password(plain_password: str, hashed_password: str | None) -> bool:
         return False
 
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
+def create_access_token(
+    data: dict[str, Any], expires_delta: timedelta | None = None
+) -> str:
     """
     Create JWT access token.
 
@@ -44,11 +47,12 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     """
     to_encode = data.copy()
 
-    # Use provided expires_delta, or default to config
-    if expires_delta is None:
-        expires_delta = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-
-    expire = datetime.now(UTC) + expires_delta
+    delta: timedelta = (
+        expires_delta
+        if expires_delta is not None
+        else timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    expire = datetime.now(UTC) + delta
     to_encode.update({"exp": expire, "iat": datetime.now(UTC)})
 
     # Always use config for secret_key and algorithm
@@ -57,7 +61,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     )
 
 
-def decode_access_token(token: str) -> dict:
+def decode_access_token(token: str) -> dict[str, Any]:
     """
     Decode and validate JWT access token.
 

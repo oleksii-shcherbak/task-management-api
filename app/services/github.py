@@ -1,3 +1,5 @@
+from typing import Any
+
 import httpx
 
 from app.core.exceptions import UnauthorizedError
@@ -27,7 +29,7 @@ async def exchange_code_for_token(
     return data["access_token"]
 
 
-async def fetch_github_profile(access_token: str) -> dict:
+async def fetch_github_profile(access_token: str) -> dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/vnd.github+json",

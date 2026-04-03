@@ -21,12 +21,11 @@ OTHER_USER = {
 
 
 async def register_and_login(client: AsyncClient, user: dict | None = None) -> str:
-    if user is None:
-        user = USER
-    await client.post("/api/v1/auth/register", json=user)
+    resolved = user if user is not None else USER
+    await client.post("/api/v1/auth/register", json=resolved)
     response = await client.post(
         "/api/v1/auth/login",
-        json={"identifier": user["email"], "password": user["password"]},
+        json={"identifier": resolved["email"], "password": resolved["password"]},
     )
     return response.json()["access_token"]
 

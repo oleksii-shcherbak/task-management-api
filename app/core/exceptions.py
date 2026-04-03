@@ -10,12 +10,12 @@ class AppException(HTTPException):
 
     code: str = "INTERNAL_ERROR"
 
-    def __init__(self, message: str):
+    def __init__(self, message: str) -> None:
         super().__init__(status_code=self.status_code, detail=message)
 
     def __init_subclass__(
-        cls, status_code: int = 500, code: str = "INTERNAL_ERROR", **kwargs
-    ):
+        cls, status_code: int = 500, code: str = "INTERNAL_ERROR", **kwargs: object
+    ) -> None:
         super().__init_subclass__(**kwargs)
         cls.status_code = status_code
         cls.code = code
@@ -42,6 +42,6 @@ class ValidationError(AppException, status_code=422, code="VALIDATION_ERROR"):
 
 
 class RateLimitError(AppException, status_code=429, code="RATE_LIMIT_EXCEEDED"):
-    def __init__(self, message: str, retry_after: int = 60):
+    def __init__(self, message: str, retry_after: int = 60) -> None:
         super().__init__(message)
         self.retry_after = retry_after

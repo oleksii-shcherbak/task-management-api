@@ -17,19 +17,17 @@ VALID_USER = {
 
 
 async def register_user(client: AsyncClient, user: dict | None = None) -> dict:
-    if user is None:
-        user = VALID_USER
-    response = await client.post("/api/v1/auth/register", json=user)
+    resolved = user if user is not None else VALID_USER
+    response = await client.post("/api/v1/auth/register", json=resolved)
     assert response.status_code == 201, f"Registration failed: {response.text}"
     return response.json()
 
 
 async def login_user(client: AsyncClient, user: dict | None = None) -> dict:
-    if user is None:
-        user = VALID_USER
+    resolved = user if user is not None else VALID_USER
     response = await client.post(
         "/api/v1/auth/login",
-        json={"identifier": user["email"], "password": user["password"]},
+        json={"identifier": resolved["email"], "password": resolved["password"]},
     )
     assert response.status_code == 200, f"Login failed: {response.text}"
     return response.json()

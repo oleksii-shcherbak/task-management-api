@@ -89,13 +89,13 @@ async def update_task(
                         task_id=task.id,
                         user_id=current_user.id,
                         action="assignee_removed",
-                        old_value=ta.user.name,
+                        old_value=ta.user.name if ta.user else None,
                     )
                     await db.delete(ta)
 
             if to_add:
                 result = await db.execute(select(User).where(User.id.in_(to_add)))
-                new_users = {u.id: u for u in result.scalars().all()}
+                new_users: dict[int, User] = {u.id: u for u in result.scalars().all()}
                 for uid in to_add:
                     db.add(
                         TaskAssignee(
@@ -104,7 +104,7 @@ async def update_task(
                             assigned_by_id=current_user.id,
                         )
                     )
-                    user = new_users.get(uid)
+                    user: User | None = new_users.get(uid)
                     log_activity(
                         db,
                         project_id=task.project_id,

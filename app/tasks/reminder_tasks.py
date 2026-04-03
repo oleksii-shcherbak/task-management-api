@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import structlog
 from sqlalchemy import select
@@ -9,7 +10,7 @@ from app.models.task import Task
 logger = structlog.get_logger()
 
 
-async def send_due_date_reminders(ctx: dict) -> None:
+async def send_due_date_reminders(ctx: dict[Any, Any]) -> None:
     now = datetime.now(UTC)
     window_end = now + timedelta(hours=24)
 

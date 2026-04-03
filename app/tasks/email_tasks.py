@@ -1,5 +1,6 @@
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from typing import Any
 
 import aiosmtplib
 import structlog
@@ -19,7 +20,7 @@ from app.tasks.email_templates import (
 logger = structlog.get_logger()
 
 
-async def _send_smtp(ctx: dict, *, to: str, subject: str, html: str) -> None:
+async def _send_smtp(ctx: dict[Any, Any], *, to: str, subject: str, html: str) -> None:
     if not ctx.get("smtp_host"):
         logger.info("smtp_skipped_no_host", to=to, subject=subject)
         return
@@ -30,7 +31,7 @@ async def _send_smtp(ctx: dict, *, to: str, subject: str, html: str) -> None:
     message["Subject"] = subject
     message.attach(MIMEText(html, "html"))
 
-    kwargs: dict = {
+    kwargs: dict[str, Any] = {
         "hostname": ctx["smtp_host"],
         "port": ctx["smtp_port"],
         "start_tls": True,
@@ -42,7 +43,9 @@ async def _send_smtp(ctx: dict, *, to: str, subject: str, html: str) -> None:
     await aiosmtplib.send(message, **kwargs)
 
 
-async def send_verification_email(ctx: dict, *, user_id: int, token: str) -> None:
+async def send_verification_email(
+    ctx: dict[Any, Any], *, user_id: int, token: str
+) -> None:
     async with ctx["db_factory"]() as db:
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
@@ -56,7 +59,9 @@ async def send_verification_email(ctx: dict, *, user_id: int, token: str) -> Non
     logger.info("verification_email_sent", user_id=user_id)
 
 
-async def send_password_reset_email(ctx: dict, *, user_id: int, token: str) -> None:
+async def send_password_reset_email(
+    ctx: dict[Any, Any], *, user_id: int, token: str
+) -> None:
     async with ctx["db_factory"]() as db:
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
@@ -70,7 +75,7 @@ async def send_password_reset_email(ctx: dict, *, user_id: int, token: str) -> N
 
 
 async def send_due_date_reminder(
-    ctx: dict,
+    ctx: dict[Any, Any],
     *,
     user_id: int,
     task_id: int,
@@ -93,7 +98,7 @@ async def send_due_date_reminder(
 
 
 async def send_project_invitation(
-    ctx: dict, *, user_id: int, project_name: str, role: str
+    ctx: dict[Any, Any], *, user_id: int, project_name: str, role: str
 ) -> None:
     async with ctx["db_factory"]() as db:
         result = await db.execute(select(User).where(User.id == user_id))
@@ -113,7 +118,7 @@ async def send_project_invitation(
 
 
 async def send_status_change_notification(
-    ctx: dict,
+    ctx: dict[Any, Any],
     *,
     user_id: int,
     task_id: int,
@@ -148,7 +153,12 @@ async def send_status_change_notification(
 
 
 async def send_assignment_notification(
-    ctx: dict, *, user_id: int, task_id: int, task_title: str, project_name: str
+    ctx: dict[Any, Any],
+    *,
+    user_id: int,
+    task_id: int,
+    task_title: str,
+    project_name: str,
 ) -> None:
     async with ctx["db_factory"]() as db:
         result = await db.execute(select(User).where(User.id == user_id))
@@ -168,7 +178,7 @@ async def send_assignment_notification(
 
 
 async def send_mention_notification(
-    ctx: dict,
+    ctx: dict[Any, Any],
     *,
     user_id: int,
     actor_name: str,

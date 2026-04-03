@@ -28,16 +28,17 @@ class RateLimiter:
         request: Request,
         redis: Redis = Depends(get_redis),
     ) -> None:
-        ip = request.client.host if request.client else "unknown"
+        client_addr = request.client
+        ip = client_addr.host if client_addr is not None else "unknown"
         key = f"rate:{request.url.path}:{ip}"
         now = time.time()
 
         async with redis.pipeline(transaction=True) as pipe:
-            pipe.zremrangebyscore(key, 0, now - self.window)
+            await pipe.zremrangebyscore(key, 0, now - self.window)
             # UUID suffix prevents member collision when requests share the same timestamp
-            pipe.zadd(key, {f"{now}:{uuid.uuid4().hex}": now})
-            pipe.zcard(key)
-            pipe.expire(key, self.window)
+            await pipe.zadd(key, {f"{now}:{uuid.uuid4().hex}": now})
+            await pipe.zcard(key)
+            await pipe.expire(key, self.window)
             results = await pipe.execute()
 
         count = results[2]  # zcard result - index matches command order above

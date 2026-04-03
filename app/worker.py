@@ -1,4 +1,4 @@
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from arq import cron
 from arq.connections import RedisSettings
@@ -17,7 +17,7 @@ from app.tasks.email_tasks import (
 from app.tasks.reminder_tasks import send_due_date_reminders
 
 
-async def startup(ctx: dict) -> None:
+async def startup(ctx: dict[Any, Any]) -> None:
     ctx["db_factory"] = AsyncSessionLocal
     ctx["smtp_host"] = settings.SMTP_HOST
     ctx["smtp_port"] = settings.SMTP_PORT
@@ -27,7 +27,7 @@ async def startup(ctx: dict) -> None:
     ctx["frontend_url"] = settings.FRONTEND_URL
 
 
-async def shutdown(_ctx: dict) -> None:
+async def shutdown(_ctx: dict[Any, Any]) -> None:
     pass
 
 
@@ -43,7 +43,7 @@ class WorkerSettings:
         send_mention_notification,
     ]
     cron_jobs: ClassVar[list] = [
-        cron(send_due_date_reminders, minute=0),
+        cron(send_due_date_reminders, minute=0),  # type: ignore[arg-type]
     ]
     on_startup = startup
     on_shutdown = shutdown
