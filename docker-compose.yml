@@ -12,6 +12,7 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:5173"]}
       REDIS_URL: redis://redis:6379/0
       DEBUG: ${DEBUG:-false}
+      SENTRY_DSN: ${SENTRY_DSN:-}
     depends_on:
       postgres:
         condition: service_healthy
