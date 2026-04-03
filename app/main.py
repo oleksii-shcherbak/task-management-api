@@ -194,8 +194,3 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-
-@app.get("/sentry-debug")
-async def trigger_error():
-    raise ValueError("Sentry test error")
