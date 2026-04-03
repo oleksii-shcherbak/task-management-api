@@ -8,10 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def encode_cursor(data: dict) -> str:
+    """Serialize a cursor payload dict to a URL-safe base64 string."""
     return base64.urlsafe_b64encode(json.dumps(data).encode()).decode()
 
 
 def decode_cursor(cursor: str) -> dict | None:
+    """Decode a cursor string produced by `encode_cursor`.
+
+    Returns `None` rather than raising if the value is missing, truncated,
+    or not valid base64/JSON - all treated as "start from the beginning".
+    """
     try:
         return json.loads(base64.urlsafe_b64decode(cursor.encode()))
     except ValueError:
@@ -19,6 +25,8 @@ def decode_cursor(cursor: str) -> dict | None:
 
 
 class CursorPage[T](BaseModel):
+    """Generic cursor-paginated response envelope."""
+
     items: list[T]
     next_cursor: str | None
     has_more: bool

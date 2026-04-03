@@ -1,3 +1,14 @@
+"""Storage service abstraction.
+
+`StorageService` defines the interface; `LocalStorageService` and
+`S3StorageService` are the two implementations.  The active backend is
+selected by `get_storage_service()` based on `settings.STORAGE_BACKEND`.
+
+Storage paths (e.g. `"attachments/uuid.pdf"`) are internal keys - they are
+never returned directly in API responses.  Callers must always convert them to
+URLs via `get_url()` before serializing to JSON.
+"""
+
 from __future__ import annotations
 
 import asyncio

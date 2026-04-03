@@ -12,6 +12,11 @@ _MENTION_RE = re.compile(r"@([a-z0-9_-]{3,30})")
 
 
 def parse_mentioned_usernames(text: str | None) -> set[str]:
+    """Extract all @-mentioned usernames from a text string.
+
+    Returns an empty set for `None` or text with no mentions.  Duplicates
+    are collapsed - each username appears at most once in the result.
+    """
     return set(_MENTION_RE.findall(text or ""))
 
 

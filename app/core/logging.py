@@ -1,3 +1,11 @@
+"""Structlog configuration.
+
+Call `setup_logging()` once at application startup.  In DEBUG mode the
+output is a human-readable colored console format; in production it emits
+structured JSON with tracebacks serialised as dicts so they survive log
+aggregation pipelines intact.
+"""
+
 import logging
 import sys
 

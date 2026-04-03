@@ -1,3 +1,11 @@
+"""Application exception hierarchy.
+
+All domain errors subclass AppException, which carries a machine-readable
+`code` alongside the HTTP status and human message.  Raise a subclass
+rather than HTTPException directly so that the global exception handler can
+emit a consistent `{"error": {"code": ..., "message": ...}}` envelope.
+"""
+
 from fastapi import HTTPException
 
 

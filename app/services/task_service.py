@@ -19,7 +19,14 @@ def log_activity(
     old_value: str | None = None,
     new_value: str | None = None,
 ) -> None:
-    """Add an ActivityLog row to the session. Caller is responsible for committing."""
+    """Stage an ActivityLog row in the current session.
+
+    The row is not flushed or committed here - the caller must do that as part
+    of its own transaction so the activity entry is atomic with the change it
+    describes.  `user_id` may be `None` for system-initiated actions.
+    `old_value` / `new_value` store display names, not IDs, so the log
+    remains accurate even if names are later changed.
+    """
     db.add(
         ActivityLog(
             project_id=project_id,
@@ -39,9 +46,24 @@ async def update_task(
     current_user: User,
     new_status: TaskStatus | None,
 ) -> None:
-    """
-    Apply updates from TaskUpdate to the task and log each meaningful change.
-    The caller is responsible for committing and re-fetching the task afterward.
+    """Apply a partial update to a task and log each meaningful field change.
+
+    Only fields present in the original request body (i.e. not excluded by
+    `exclude_unset`) are processed.  Each supported field has dedicated
+    handling:
+
+    - `status_id`: logs old/new status *names* (not IDs) for readability.
+    - `priority`: normalises enum to its `.value` string before comparing.
+    - `assignee_ids`: computes the diff against current assignees, removes
+      departing ones via `db.delete`, and adds arriving ones as new
+      `TaskAssignee` rows.  An activity entry is written for each individual
+      add/remove rather than a single bulk event.
+    - All other fields: set directly via `setattr`; a title change is also
+      logged.
+
+    The caller is responsible for committing and re-fetching the task
+    afterward so that relationships (e.g. `task.assignees`) reflect the
+    updated state in the response.
     """
     updates = body.model_dump(exclude_unset=True)
 

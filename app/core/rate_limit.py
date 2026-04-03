@@ -1,3 +1,16 @@
+"""Redis-backed sliding-window rate limiter.
+
+`RateLimiter` is a FastAPI dependency factory. Instantiate it with the
+desired limit and window at route definition time, then declare it as a
+dependency so FastAPI injects the Redis client and runs the check on every
+request:
+
+    limiter = RateLimiter(limit=10, window=60)
+
+    @router.post("/", dependencies=[Depends(limiter)])
+    async def create(...): ...
+"""
+
 import time
 import uuid
 
