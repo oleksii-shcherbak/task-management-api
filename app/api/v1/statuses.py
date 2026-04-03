@@ -26,7 +26,7 @@ from app.models.user import User
 from app.schemas.status import StatusCreate, StatusUpdate
 from app.schemas.task import TaskStatusResponse
 
-router = APIRouter(prefix="/projects/{project_id}/statuses", tags=["statuses"])
+router = APIRouter(prefix="/projects/{project_id}/statuses", tags=["Statuses"])
 
 
 async def _get_status_or_404(
