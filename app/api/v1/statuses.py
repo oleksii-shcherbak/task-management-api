@@ -44,7 +44,20 @@ async def _get_status_or_404(
     return status_obj
 
 
-@router.post("", response_model=TaskStatusResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=TaskStatusResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create status",
+    description="Add a new task status column to the project. Status names are unique per project (case-insensitive).",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Project not found"},
+        409: {"description": "Status name already exists"},
+        422: {"description": "Validation error"},
+    },
+)
 async def create_status(
     project_id: int,
     body: StatusCreate,
@@ -91,7 +104,19 @@ async def create_status(
     return new_status
 
 
-@router.patch("/{status_id}", response_model=TaskStatusResponse)
+@router.patch(
+    "/{status_id}",
+    response_model=TaskStatusResponse,
+    summary="Update status",
+    description="Rename, recolor, reorder, or change the default status. Setting is_default=true promotes this status and demotes the current default.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Project or status not found"},
+        409: {"description": "Status name already exists"},
+        422: {"description": "Validation error"},
+    },
+)
 async def update_status(
     project_id: int,
     status_id: int,
@@ -179,7 +204,20 @@ async def update_status(
     return status_obj
 
 
-@router.delete("/{status_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{status_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete status",
+    description="Delete a status column. Supply move_tasks_to to migrate existing tasks first. The default status and the last remaining status cannot be deleted.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Project or status not found"},
+        422: {
+            "description": "Validation error (default or last status, tasks need migration)"
+        },
+    },
+)
 async def delete_status(
     project_id: int,
     status_id: int,

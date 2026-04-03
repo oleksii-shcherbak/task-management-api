@@ -58,6 +58,14 @@ async def get_task_or_404(task_id: int, project_id: int, db: AsyncSession) -> Ta
     "/{project_id}/tasks/{task_id}/comments",
     response_model=CommentResponse,
     status_code=201,
+    summary="Add comment",
+    description="Post a comment on a task. @mentions are parsed and notification emails are queued for mentioned project members.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Project or task not found"},
+        422: {"description": "Validation error"},
+    },
 )
 async def add_comment(
     project_id: int,
@@ -108,6 +116,14 @@ async def add_comment(
 @project_tasks_router.get(
     "/{project_id}/tasks/{task_id}/comments",
     response_model=CursorPage[CommentResponse],
+    summary="List comments",
+    description="Cursor-paginated comments for a task, ordered oldest first.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Project or task not found"},
+        422: {"description": "Invalid cursor"},
+    },
 )
 async def list_comments(
     project_id: int,
@@ -150,7 +166,18 @@ async def list_comments(
     )
 
 
-@comments_router.patch("/{comment_id}", response_model=CommentResponse)
+@comments_router.patch(
+    "/{comment_id}",
+    response_model=CommentResponse,
+    summary="Edit comment",
+    description="Update comment content. Only the comment author can edit. @mention diffs are recalculated on each edit.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not the comment author"},
+        404: {"description": "Comment not found"},
+        422: {"description": "Validation error"},
+    },
+)
 async def edit_comment(
     comment_id: int,
     body: CommentUpdate,
@@ -207,7 +234,17 @@ async def edit_comment(
     return await get_comment_or_404(comment.id, db)
 
 
-@comments_router.delete("/{comment_id}", status_code=204)
+@comments_router.delete(
+    "/{comment_id}",
+    status_code=204,
+    summary="Delete comment",
+    description="Delete a comment. Authors can delete their own; owners and managers can delete any comment.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Comment not found"},
+    },
+)
 async def delete_comment(
     comment_id: int,
     db: AsyncSession = Depends(get_db),

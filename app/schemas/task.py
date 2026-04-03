@@ -29,6 +29,19 @@ class AssigneeResponse(BaseModel):
 
 
 class TaskCreate(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "title": "Implement login page",
+                "description": "Build the login form with email and password fields. Mention @alice for review.",
+                "status_id": 1,
+                "assignee_ids": [2, 3],
+                "priority": "high",
+                "due_date": "2026-05-01T00:00:00Z",
+            }
+        }
+    }
+
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
     status_id: int | None = None

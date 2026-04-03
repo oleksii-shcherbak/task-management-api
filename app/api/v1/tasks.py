@@ -68,6 +68,14 @@ async def get_next_position(project_id: int, status_id: int, db: AsyncSession) -
     "/{project_id}/tasks",
     status_code=status.HTTP_201_CREATED,
     response_model=TaskResponse,
+    summary="Create task",
+    description="Create a task in the project. Falls back to the default status if none is specified. Only owners and managers can create tasks.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Project or status not found"},
+        422: {"description": "Validation error"},
+    },
 )
 async def create_task(
     project_id: int,
@@ -187,7 +195,16 @@ async def create_task(
 
 
 @project_tasks_router.get(
-    "/{project_id}/tasks", response_model=CursorPage[TaskResponse]
+    "/{project_id}/tasks",
+    response_model=CursorPage[TaskResponse],
+    summary="List tasks",
+    description="Cursor-paginated task list with optional filters by status, priority, or assignee.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Project not found"},
+        422: {"description": "Invalid cursor or filter value"},
+    },
 )
 async def list_tasks(
     project_id: int,
@@ -254,7 +271,16 @@ async def list_tasks(
 # --- Get task ---
 
 
-@tasks_router.get("/{task_id}", response_model=TaskResponse)
+@tasks_router.get(
+    "/{task_id}",
+    response_model=TaskResponse,
+    summary="Get task",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Task not found"},
+    },
+)
 async def get_task(
     task_id: int,
     current_user: User = Depends(get_current_user),
@@ -268,7 +294,17 @@ async def get_task(
 # --- Get task activity ---
 
 
-@tasks_router.get("/{task_id}/activity", response_model=list[ActivityLogResponse])
+@tasks_router.get(
+    "/{task_id}/activity",
+    response_model=list[ActivityLogResponse],
+    summary="Get task activity log",
+    description="Chronological list of all recorded changes to this task.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Task not found"},
+    },
+)
 async def get_task_activity(
     task_id: int,
     current_user: User = Depends(get_current_user),
@@ -420,7 +456,18 @@ async def _apply_mention_diff(
 # --- Update task ---
 
 
-@tasks_router.patch("/{task_id}", response_model=TaskResponse)
+@tasks_router.patch(
+    "/{task_id}",
+    response_model=TaskResponse,
+    summary="Update task",
+    description="Partial update. Owners and managers can update all fields; members can only update status and description if assigned to the task.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Task or status not found"},
+        422: {"description": "Validation error"},
+    },
+)
 async def update_task(
     task_id: int,
     body: TaskUpdate,
@@ -507,7 +554,18 @@ async def update_task(
 # --- Reorder task ---
 
 
-@tasks_router.patch("/{task_id}/position", response_model=TaskResponse)
+@tasks_router.patch(
+    "/{task_id}/position",
+    response_model=TaskResponse,
+    summary="Reorder task",
+    description="Move a task to a specific position within a status column, shifting other tasks to maintain contiguous ordering.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Task or status not found"},
+        422: {"description": "Validation error"},
+    },
+)
 async def reorder_task(
     task_id: int,
     body: TaskReorder,
@@ -611,7 +669,17 @@ async def reorder_task(
 # --- Delete task (soft) ---
 
 
-@tasks_router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+@tasks_router.delete(
+    "/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete task",
+    description="Soft-delete a task. Only owners and managers can delete tasks.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Task not found"},
+    },
+)
 async def delete_task(
     task_id: int,
     current_user: User = Depends(get_current_user),

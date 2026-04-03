@@ -40,7 +40,17 @@ from app.utils.pagination import CursorPage, decode_cursor, encode_cursor
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=ProjectResponse)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ProjectResponse,
+    summary="Create project",
+    description="Create a new project. The creator is automatically added as owner with three default statuses (Backlog, In Progress, Done).",
+    responses={
+        401: {"description": "Not authenticated"},
+        422: {"description": "Validation error"},
+    },
+)
 async def create_project(
     body: ProjectCreate,
     current_user: User = Depends(get_current_user),
@@ -93,7 +103,17 @@ async def create_project(
     return project
 
 
-@router.get("/{project_id}/statuses", response_model=list[TaskStatusResponse])
+@router.get(
+    "/{project_id}/statuses",
+    response_model=list[TaskStatusResponse],
+    summary="List project statuses",
+    description="Ordered list of all task statuses for a project. Results are cached in Redis for 10 minutes.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Project not found"},
+    },
+)
 async def list_project_statuses(
     project_id: int,
     current_user: User = Depends(get_current_user),
@@ -146,7 +166,16 @@ async def list_project_statuses(
     return statuses
 
 
-@router.get("", response_model=CursorPage[ProjectResponse])
+@router.get(
+    "",
+    response_model=CursorPage[ProjectResponse],
+    summary="List projects",
+    description="Cursor-paginated list of projects the current user is a member of, ordered by creation time.",
+    responses={
+        401: {"description": "Not authenticated"},
+        422: {"description": "Invalid cursor"},
+    },
+)
 async def list_projects(
     cursor: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
@@ -194,7 +223,16 @@ async def list_projects(
     return CursorPage(items=projects, next_cursor=next_cursor, has_more=has_more)
 
 
-@router.get("/{project_id}", response_model=ProjectResponse)
+@router.get(
+    "/{project_id}",
+    response_model=ProjectResponse,
+    summary="Get project",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Project not found"},
+    },
+)
 async def get_project(
     project_id: int,
     current_user: User = Depends(get_current_user),
@@ -206,7 +244,18 @@ async def get_project(
     return project
 
 
-@router.patch("/{project_id}", response_model=ProjectResponse)
+@router.patch(
+    "/{project_id}",
+    response_model=ProjectResponse,
+    summary="Update project",
+    description="Partial update of project metadata. Only owners and managers can make changes.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Project not found"},
+        422: {"description": "Validation error"},
+    },
+)
 async def update_project(
     project_id: int,
     body: ProjectUpdate,
@@ -231,7 +280,17 @@ async def update_project(
     return project
 
 
-@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{project_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete project",
+    description="Soft-delete the project. Only the owner can delete. Tasks, members, and statuses are cascade-deleted.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Only the project owner can delete"},
+        404: {"description": "Project not found"},
+    },
+)
 async def delete_project(
     project_id: int,
     current_user: User = Depends(get_current_user),
@@ -252,6 +311,15 @@ async def delete_project(
     "/{project_id}/members",
     status_code=status.HTTP_201_CREATED,
     response_model=MemberResponse,
+    summary="Add project member",
+    description="Add a user to the project and send a project invitation email. The owner role cannot be assigned through this endpoint.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Project or user not found"},
+        409: {"description": "User is already a member"},
+        422: {"description": "Validation error"},
+    },
 )
 async def add_member(
     project_id: int,
@@ -302,7 +370,16 @@ async def add_member(
     return new_member
 
 
-@router.get("/{project_id}/members", response_model=list[MemberResponse])
+@router.get(
+    "/{project_id}/members",
+    response_model=list[MemberResponse],
+    summary="List project members",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Project not found"},
+    },
+)
 async def list_members(
     project_id: int,
     current_user: User = Depends(get_current_user),
@@ -318,7 +395,18 @@ async def list_members(
     return list(result.scalars().all())
 
 
-@router.get("/{project_id}/members/search", response_model=list[MemberSearchResult])
+@router.get(
+    "/{project_id}/members/search",
+    response_model=list[MemberSearchResult],
+    summary="Search project members",
+    description="Username prefix search scoped to current project members. Returns up to 10 results.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Project not found"},
+        422: {"description": "Validation error"},
+    },
+)
 async def search_members(
     project_id: int,
     q: str = Query(min_length=1),
@@ -353,7 +441,15 @@ async def search_members(
 
 
 @router.delete(
-    "/{project_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT
+    "/{project_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove project member",
+    description="Remove a member from the project. The project owner cannot be removed. Owners and managers can remove anyone else.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Project or member not found"},
+    },
 )
 async def remove_member(
     project_id: int,
@@ -385,7 +481,18 @@ async def remove_member(
     await invalidate_membership_cache(project_id, user_id, redis)
 
 
-@router.patch("/{project_id}/members/{user_id}/role", response_model=MemberResponse)
+@router.patch(
+    "/{project_id}/members/{user_id}/role",
+    response_model=MemberResponse,
+    summary="Update member role",
+    description="Change a member's role. Only the project owner can do this, and the owner role cannot be assigned.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Project or member not found"},
+        422: {"description": "Validation error"},
+    },
+)
 async def update_member_role(
     project_id: int,
     user_id: int,

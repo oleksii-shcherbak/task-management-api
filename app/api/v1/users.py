@@ -42,12 +42,27 @@ ALLOWED_AVATAR_MIME_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp
 router = APIRouter(prefix="/users", tags=["Users"])
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get(
+    "/me",
+    response_model=UserResponse,
+    summary="Get current user",
+    responses={401: {"description": "Not authenticated"}},
+)
 async def get_me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
-@router.patch("/me", response_model=UserResponse)
+@router.patch(
+    "/me",
+    response_model=UserResponse,
+    summary="Update profile",
+    description="Partial update of profile fields. Changing email resets verification status; username changes are limited to once per 30 days.",
+    responses={
+        401: {"description": "Not authenticated"},
+        409: {"description": "Email or username already taken"},
+        422: {"description": "Validation error"},
+    },
+)
 async def update_me(
     data: UserUpdate,
     current_user: User = Depends(get_current_user),
@@ -118,7 +133,16 @@ async def update_me(
     return current_user
 
 
-@router.patch("/me/password", status_code=204)
+@router.patch(
+    "/me/password",
+    status_code=204,
+    summary="Change password",
+    description="Verify the current password, set a new one, and revoke all active refresh tokens.",
+    responses={
+        401: {"description": "Not authenticated or current password incorrect"},
+        422: {"description": "Validation error"},
+    },
+)
 async def change_password(
     data: PasswordChange,
     current_user: User = Depends(get_current_user),
@@ -140,7 +164,13 @@ async def change_password(
     await db.commit()
 
 
-@router.delete("/me", status_code=204)
+@router.delete(
+    "/me",
+    status_code=204,
+    summary="Delete account",
+    description="Soft-delete the current user. The account is flagged with a timestamp and excluded from all lookups.",
+    responses={401: {"description": "Not authenticated"}},
+)
 async def delete_me(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -149,7 +179,16 @@ async def delete_me(
     await db.commit()
 
 
-@router.post("/me/avatar", response_model=UserResponse)
+@router.post(
+    "/me/avatar",
+    response_model=UserResponse,
+    summary="Upload avatar",
+    description="Replace the current avatar. Accepts JPEG, PNG, GIF, or WebP up to 2 MB. The previous file is deleted from storage.",
+    responses={
+        401: {"description": "Not authenticated"},
+        422: {"description": "File too large or unsupported format"},
+    },
+)
 async def upload_avatar(
     file: UploadFile,
     current_user: User = Depends(get_current_user),
@@ -178,7 +217,12 @@ async def upload_avatar(
     return current_user
 
 
-@router.delete("/me/avatar", status_code=204)
+@router.delete(
+    "/me/avatar",
+    status_code=204,
+    summary="Delete avatar",
+    responses={401: {"description": "Not authenticated"}},
+)
 async def delete_avatar(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -192,7 +236,16 @@ async def delete_avatar(
     await db.commit()
 
 
-@router.get("/me/mentions", response_model=CursorPage[MentionInboxItem])
+@router.get(
+    "/me/mentions",
+    response_model=CursorPage[MentionInboxItem],
+    summary="Get mention inbox",
+    description="Cursor-paginated list of task descriptions and comments that @mention the current user, sorted newest first.",
+    responses={
+        401: {"description": "Not authenticated"},
+        422: {"description": "Invalid cursor"},
+    },
+)
 async def get_my_mentions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -308,7 +361,13 @@ async def get_my_mentions(
     return CursorPage(items=items, next_cursor=next_cursor, has_more=has_more)
 
 
-@router.get("/{user_id}", response_model=PublicUserResponse)
+@router.get(
+    "/{user_id}",
+    response_model=PublicUserResponse,
+    summary="Get user profile",
+    description="Public profile for any non-deleted user. Returns id, name, username, and avatar only.",
+    responses={404: {"description": "User not found"}},
+)
 async def get_user(user_id: int, db: AsyncSession = Depends(get_db)) -> User:
     result = await db.execute(
         select(User).where(User.id == user_id, User.deleted_at.is_(None))

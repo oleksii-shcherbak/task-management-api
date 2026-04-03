@@ -109,6 +109,14 @@ async def _get_task_and_check_member(
     "/{task_id}/attachments",
     response_model=AttachmentResponse,
     status_code=201,
+    summary="Upload attachment",
+    description="Attach a file to a task. Supports images, PDFs, office documents, and plain text/CSV files up to 10 MB.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Task not found"},
+        422: {"description": "File too large or unsupported format"},
+    },
 )
 async def upload_attachment(
     task_id: int,
@@ -149,6 +157,12 @@ async def upload_attachment(
 @task_attachments_router.get(
     "/{task_id}/attachments",
     response_model=list[AttachmentResponse],
+    summary="List attachments",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Task not found"},
+    },
 )
 async def list_attachments(
     task_id: int,
@@ -168,7 +182,17 @@ async def list_attachments(
     return [_to_response(a, storage) for a in attachments]
 
 
-@attachments_router.get("/{attachment_id}/url", response_model=AttachmentResponse)
+@attachments_router.get(
+    "/{attachment_id}/url",
+    response_model=AttachmentResponse,
+    summary="Get attachment URL",
+    description="Retrieve attachment metadata including a fresh download URL (presigned for S3, direct path for local storage).",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not a project member"},
+        404: {"description": "Attachment not found"},
+    },
+)
 async def get_attachment_url(
     attachment_id: int,
     current_user: User = Depends(get_current_user),
@@ -180,7 +204,17 @@ async def get_attachment_url(
     return _to_response(attachment, storage)
 
 
-@attachments_router.delete("/{attachment_id}", status_code=204)
+@attachments_router.delete(
+    "/{attachment_id}",
+    status_code=204,
+    summary="Delete attachment",
+    description="Delete an attachment. The uploader, project owners, and managers can delete. The file is removed from storage after the DB record is deleted.",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Insufficient permissions"},
+        404: {"description": "Attachment not found"},
+    },
+)
 async def delete_attachment(
     attachment_id: int,
     current_user: User = Depends(get_current_user),

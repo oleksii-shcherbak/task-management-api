@@ -7,6 +7,17 @@ from app.models.project_member import ProjectRole
 
 
 class ProjectCreate(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "name": "Website Redesign",
+                "description": "Redesign the company marketing site",
+                "category": "Design",
+                "deadline": "2026-12-31T00:00:00Z",
+            }
+        }
+    }
+
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
     category: str | None = Field(default=None, max_length=100)

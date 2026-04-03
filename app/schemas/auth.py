@@ -9,6 +9,17 @@ RESERVED_USERNAMES = frozenset(
 
 
 class RegisterRequest(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "email": "alice@example.com",
+                "password": "securepassword123",
+                "name": "Alice",
+                "username": "alice",
+            }
+        }
+    }
+
     email: EmailStr
     password: str = Field(min_length=8)
     name: str = Field(min_length=1, max_length=255)
@@ -29,6 +40,15 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "identifier": "alice@example.com",
+                "password": "securepassword123",
+            }
+        }
+    }
+
     identifier: str
     password: str
 
@@ -38,6 +58,16 @@ class RefreshRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                "refresh_token": "dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4...",
+                "token_type": "bearer",
+            }
+        }
+    }
+
     access_token: str
     refresh_token: str
     token_type: str = "bearer"  # noqa: S105

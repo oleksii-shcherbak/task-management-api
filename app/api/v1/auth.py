@@ -106,7 +106,17 @@ async def _revoke_all_refresh_tokens(user_id: int, db: AsyncSession) -> None:
     )
 
 
-@router.post("/register", response_model=TokenResponse, status_code=201)
+@router.post(
+    "/register",
+    response_model=TokenResponse,
+    status_code=201,
+    summary="Register a new user",
+    description="Create an account and return tokens immediately - no separate login step needed. A verification email is queued in the background.",
+    responses={
+        409: {"description": "Email or username already taken"},
+        422: {"description": "Validation error"},
+    },
+)
 async def register(
     data: RegisterRequest,
     db: AsyncSession = Depends(get_db),
@@ -154,6 +164,13 @@ async def register(
     "/login",
     response_model=TokenResponse,
     dependencies=[Depends(RateLimiter(limit=5, window=60))],
+    summary="Log in",
+    description="Authenticate with email or username plus password. Returns an access token (15 min) and a refresh token (30 days).",
+    responses={
+        401: {"description": "Invalid credentials"},
+        422: {"description": "Validation error"},
+        429: {"description": "Rate limit exceeded"},
+    },
 )
 async def login(
     data: LoginRequest, db: AsyncSession = Depends(get_db)
@@ -176,7 +193,16 @@ async def login(
     return response
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post(
+    "/refresh",
+    response_model=TokenResponse,
+    summary="Refresh access token",
+    description="Exchange a valid refresh token for a new token pair. The submitted token is immediately revoked (rotation).",
+    responses={
+        401: {"description": "Invalid or expired refresh token"},
+        422: {"description": "Validation error"},
+    },
+)
 async def refresh(
     data: RefreshRequest, db: AsyncSession = Depends(get_db)
 ) -> TokenResponse:
@@ -201,7 +227,13 @@ async def refresh(
     return response
 
 
-@router.post("/logout", status_code=204)
+@router.post(
+    "/logout",
+    status_code=204,
+    summary="Log out",
+    description="Revoke a refresh token. Silently succeeds if the token is unknown or already revoked.",
+    responses={422: {"description": "Validation error"}},
+)
 async def logout(data: RefreshRequest, db: AsyncSession = Depends(get_db)) -> None:
     token_hash = hash_token(data.refresh_token)
 
@@ -215,7 +247,15 @@ async def logout(data: RefreshRequest, db: AsyncSession = Depends(get_db)) -> No
         await db.commit()
 
 
-@router.get("/verify-email")
+@router.get(
+    "/verify-email",
+    summary="Verify email address",
+    description="Consume a one-time email verification token and mark the account as verified.",
+    responses={
+        404: {"description": "Invalid or expired token"},
+        422: {"description": "Validation error"},
+    },
+)
 async def verify_email(
     token: str, db: AsyncSession = Depends(get_db)
 ) -> dict[str, str]:
@@ -249,6 +289,13 @@ async def verify_email(
 @router.post(
     "/resend-verification",
     dependencies=[Depends(RateLimiter(limit=3, window=3600))],
+    summary="Resend verification email",
+    description="Queue a fresh verification email. Any previously unused tokens for this account are invalidated.",
+    responses={
+        401: {"description": "Not authenticated"},
+        409: {"description": "Email is already verified"},
+        429: {"description": "Rate limit exceeded"},
+    },
 )
 async def resend_verification(
     db: AsyncSession = Depends(get_db),
@@ -272,7 +319,11 @@ async def resend_verification(
     return {"message": "Verification email sent"}
 
 
-@router.get("/github")
+@router.get(
+    "/github",
+    summary="Start GitHub OAuth flow",
+    description="Redirect the browser to GitHub's authorization page to begin the OAuth login flow.",
+)
 async def github_oauth_redirect() -> RedirectResponse:
     params = urlencode(
         {
@@ -284,7 +335,16 @@ async def github_oauth_redirect() -> RedirectResponse:
     return RedirectResponse(f"https://github.com/login/oauth/authorize?{params}")
 
 
-@router.get("/github/callback", response_model=TokenResponse)
+@router.get(
+    "/github/callback",
+    response_model=TokenResponse,
+    summary="GitHub OAuth callback",
+    description="Exchange the authorization code for tokens. Creates a new account if no matching GitHub or email record exists.",
+    responses={
+        401: {"description": "GitHub OAuth failed"},
+        422: {"description": "GitHub account has no accessible email"},
+    },
+)
 async def github_oauth_callback(
     code: str, db: AsyncSession = Depends(get_db)
 ) -> TokenResponse:
@@ -356,7 +416,17 @@ async def github_oauth_callback(
     return response
 
 
-@router.post("/set-password", status_code=204)
+@router.post(
+    "/set-password",
+    status_code=204,
+    summary="Set password for OAuth account",
+    description="Add a password to an account that was created via OAuth and currently has none.",
+    responses={
+        401: {"description": "Not authenticated"},
+        409: {"description": "Account already has a password"},
+        422: {"description": "Validation error"},
+    },
+)
 async def set_password(
     data: SetPasswordRequest,
     current_user: User = Depends(get_current_user),
@@ -376,6 +446,12 @@ async def set_password(
 @router.post(
     "/forgot-password",
     dependencies=[Depends(RateLimiter(limit=3, window=3600))],
+    summary="Request password reset",
+    description="Send a reset link if the email belongs to an active account. The response is identical whether the email exists or not to prevent enumeration.",
+    responses={
+        422: {"description": "Validation error"},
+        429: {"description": "Rate limit exceeded"},
+    },
 )
 async def forgot_password(
     data: ForgotPasswordRequest,
@@ -422,7 +498,16 @@ async def forgot_password(
     }
 
 
-@router.post("/reset-password", status_code=204)
+@router.post(
+    "/reset-password",
+    status_code=204,
+    summary="Reset password",
+    description="Consume a one-time reset token and set a new password. All active refresh tokens are revoked.",
+    responses={
+        404: {"description": "Invalid or expired reset token"},
+        422: {"description": "Validation error"},
+    },
+)
 async def reset_password(
     data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)
 ) -> None:
