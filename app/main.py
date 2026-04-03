@@ -161,6 +161,7 @@ async def validation_exception_handler(
 async def unhandled_exception_handler(
     _request: Request, exc: Exception
 ) -> JSONResponse:
+    sentry_sdk.capture_exception(exc)
     logger.error("unhandled_exception", exc_info=exc)
     return JSONResponse(
         status_code=500,
