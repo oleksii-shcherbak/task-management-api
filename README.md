@@ -88,7 +88,8 @@ uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
 
-The API will be available at `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`, ReDoc at `http://localhost:8000/redoc`.
+The API will be available at `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`, ReDoc at
+`http://localhost:8000/redoc`.
 
 ### Docker Setup
 
@@ -115,7 +116,8 @@ uv run pytest --cov=app --cov-report=term-missing
 ```
 
 > Test coverage is reported at ~72%. The actual covered surface is higher — pytest-asyncio's session-scoped event loop
-> causes under-attribution in async route handlers: coroutines execute and tests pass, but `coverage.py`'s `sys.settrace`
+> causes under-attribution in async route handlers: coroutines execute and tests pass, but `coverage.py`'s
+`sys.settrace`
 > loses attribution at the session boundary. This is a known framework limitation, not missing test coverage.
 
 ### Running the Background Worker
@@ -126,3 +128,115 @@ uv run arq app.worker.WorkerSettings
 
 The worker handles email notifications and due-date reminders. Set `SMTP_HOST` in `.env` to enable sending; leave it
 empty to log emails to stdout instead.
+
+---
+
+## API Reference
+
+All endpoints are prefixed with `/api/v1`. Protected endpoints require `Authorization: Bearer <access_token>`.
+
+The Postman collection in `postman/` covers all endpoints with pre-written test scripts and automatic token/variable
+saving.
+
+### Auth — `/api/v1/auth`
+
+| Method | Path                   | Description                    |
+|--------|------------------------|--------------------------------|
+| `POST` | `/register`            | Register and receive tokens    |
+| `POST` | `/login`               | Log in with email or username  |
+| `POST` | `/refresh`             | Rotate refresh token           |
+| `POST` | `/logout`              | Revoke refresh token           |
+| `GET`  | `/verify-email`        | Verify email via query token   |
+| `POST` | `/resend-verification` | Resend verification email      |
+| `GET`  | `/github`              | Start GitHub OAuth flow        |
+| `POST` | `/forgot-password`     | Request password reset email   |
+| `POST` | `/reset-password`      | Reset password via email token |
+
+### Users — `/api/v1/users`
+
+| Method   | Path           | Description                             |
+|----------|----------------|-----------------------------------------|
+| `GET`    | `/me`          | Get current user profile                |
+| `PATCH`  | `/me`          | Update name or username                 |
+| `PATCH`  | `/me/password` | Change password                         |
+| `DELETE` | `/me`          | Soft-delete account                     |
+| `POST`   | `/me/avatar`   | Upload avatar (JPEG/PNG/GIF/WebP, 2 MB) |
+| `DELETE` | `/me/avatar`   | Remove avatar                           |
+| `GET`    | `/me/mentions` | Paginated @mention inbox                |
+| `GET`    | `/{id}`        | Public profile (name + avatar only)     |
+
+### Projects — `/api/v1/projects`
+
+| Method   | Path                           | Description                      |
+|----------|--------------------------------|----------------------------------|
+| `POST`   | `/`                            | Create project                   |
+| `GET`    | `/`                            | List projects (cursor-paginated) |
+| `GET`    | `/{id}`                        | Get project                      |
+| `PATCH`  | `/{id}`                        | Update project                   |
+| `DELETE` | `/{id}`                        | Delete project                   |
+| `GET`    | `/{id}/statuses`               | List task statuses               |
+| `POST`   | `/{id}/members`                | Add member                       |
+| `GET`    | `/{id}/members`                | List members                     |
+| `GET`    | `/{id}/members/search`         | Search members by name           |
+| `PATCH`  | `/{id}/members/{user_id}/role` | Update member role               |
+| `DELETE` | `/{id}/members/{user_id}`      | Remove member                    |
+
+### Tasks — `/api/v1`
+
+| Method   | Path                   | Description                                                             |
+|----------|------------------------|-------------------------------------------------------------------------|
+| `POST`   | `/projects/{id}/tasks` | Create task                                                             |
+| `GET`    | `/projects/{id}/tasks` | List tasks (paginated, filterable by status/priority/assignee)          |
+| `GET`    | `/tasks/{id}`          | Get task                                                                |
+| `PATCH`  | `/tasks/{id}`          | Update task (title, description, status, assignees, priority, due date) |
+| `PATCH`  | `/tasks/{id}/position` | Reorder task within status column                                       |
+| `DELETE` | `/tasks/{id}`          | Delete task                                                             |
+| `GET`    | `/tasks/{id}/activity` | Task activity log                                                       |
+
+### Comments — `/api/v1`
+
+| Method   | Path                                      | Description                      |
+|----------|-------------------------------------------|----------------------------------|
+| `POST`   | `/projects/{id}/tasks/{task_id}/comments` | Add comment (supports @mentions) |
+| `GET`    | `/projects/{id}/tasks/{task_id}/comments` | List comments (cursor-paginated) |
+| `PATCH`  | `/comments/{id}`                          | Edit comment                     |
+| `DELETE` | `/comments/{id}`                          | Delete comment                   |
+
+### Attachments — `/api/v1`
+
+| Method   | Path                      | Description         |
+|----------|---------------------------|---------------------|
+| `POST`   | `/tasks/{id}/attachments` | Upload file (10 MB) |
+| `GET`    | `/tasks/{id}/attachments` | List attachments    |
+| `GET`    | `/attachments/{id}/url`   | Get download URL    |
+| `DELETE` | `/attachments/{id}`       | Delete attachment   |
+
+### Statuses — `/api/v1/projects/{id}/statuses`
+
+| Method   | Path           | Description                                   |
+|----------|----------------|-----------------------------------------------|
+| `POST`   | `/`            | Create custom status                          |
+| `PATCH`  | `/{status_id}` | Update name, color, default flag, or position |
+| `DELETE` | `/{status_id}` | Delete status (with optional task migration)  |
+
+---
+
+## Deployment
+
+The production instance runs on a single AWS EC2 t4g.small (Graviton2, eu-north-1). All services — API, background
+worker, PostgreSQL, and Redis — run in Docker Compose on the same instance. Database migrations run automatically on
+container startup via the entrypoint script.
+
+```bash
+# Production deploy (run on the server)
+docker compose -f docker-compose.yml up -d --build
+```
+
+The GitHub Actions CI pipeline runs on every push: linting with Ruff, integration tests with pytest, and dependency
+vulnerability scanning with pip-audit.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
