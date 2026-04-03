@@ -2,6 +2,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
+import sentry_sdk
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -25,6 +26,14 @@ from app.core.exceptions import AppException, RateLimitError
 from app.core.logging import setup_logging
 
 setup_logging()
+
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment="production" if not settings.DEBUG else "development",
+        traces_sample_rate=0.1,
+        send_default_pii=True,
+    )
 
 
 @asynccontextmanager
@@ -184,3 +193,8 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/sentry-debug")
+async def trigger_error():
+    raise ValueError("Sentry test error")

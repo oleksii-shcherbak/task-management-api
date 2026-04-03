@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     AWS_S3_REGION: str = "us-east-1"
     AWS_S3_PRESIGNED_URL_EXPIRES: int = 3600
 
+    # Sentry
+    SENTRY_DSN: str = ""
+
     # Configuration for loading from .env file
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
