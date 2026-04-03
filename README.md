@@ -138,7 +138,7 @@ All endpoints are prefixed with `/api/v1`. Protected endpoints require `Authoriz
 The Postman collection in `postman/` covers all endpoints with pre-written test scripts and automatic token/variable
 saving.
 
-### Auth — `/api/v1/auth`
+### Auth
 
 | Method | Path                   | Description                    |
 |--------|------------------------|--------------------------------|
@@ -152,7 +152,7 @@ saving.
 | `POST` | `/forgot-password`     | Request password reset email   |
 | `POST` | `/reset-password`      | Reset password via email token |
 
-### Users — `/api/v1/users`
+### Users
 
 | Method   | Path           | Description                             |
 |----------|----------------|-----------------------------------------|
@@ -165,7 +165,7 @@ saving.
 | `GET`    | `/me/mentions` | Paginated @mention inbox                |
 | `GET`    | `/{id}`        | Public profile (name + avatar only)     |
 
-### Projects — `/api/v1/projects`
+### Projects
 
 | Method   | Path                           | Description                      |
 |----------|--------------------------------|----------------------------------|
@@ -181,7 +181,7 @@ saving.
 | `PATCH`  | `/{id}/members/{user_id}/role` | Update member role               |
 | `DELETE` | `/{id}/members/{user_id}`      | Remove member                    |
 
-### Tasks — `/api/v1`
+### Tasks
 
 | Method   | Path                   | Description                                                             |
 |----------|------------------------|-------------------------------------------------------------------------|
@@ -193,7 +193,7 @@ saving.
 | `DELETE` | `/tasks/{id}`          | Delete task                                                             |
 | `GET`    | `/tasks/{id}/activity` | Task activity log                                                       |
 
-### Comments — `/api/v1`
+### Comments
 
 | Method   | Path                                      | Description                      |
 |----------|-------------------------------------------|----------------------------------|
@@ -202,7 +202,7 @@ saving.
 | `PATCH`  | `/comments/{id}`                          | Edit comment                     |
 | `DELETE` | `/comments/{id}`                          | Delete comment                   |
 
-### Attachments — `/api/v1`
+### Attachments
 
 | Method   | Path                      | Description         |
 |----------|---------------------------|---------------------|
@@ -211,7 +211,7 @@ saving.
 | `GET`    | `/attachments/{id}/url`   | Get download URL    |
 | `DELETE` | `/attachments/{id}`       | Delete attachment   |
 
-### Statuses — `/api/v1/projects/{id}/statuses`
+### Statuses
 
 | Method   | Path           | Description                                   |
 |----------|----------------|-----------------------------------------------|
